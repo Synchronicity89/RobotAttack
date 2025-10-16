@@ -1,18 +1,28 @@
-let mcan = document.getElementById("maincanvas");
-let mctx = mcan.getContext("2d");
-mcan.width = window.innerWidth;
-mcan.height = window.innerHeight;
-let mcw = mcan.width;
-let mch = mcan.height;
-let mcm = 0;
-if (mcw > mch) {
-    mcm = mch;
+let mcan, mctx, mcw, mch, mcm;
+if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+    // Browser environment
+    mcan = document.getElementById("maincanvas");
+    mctx = mcan.getContext("2d");
+    mcan.width = window.innerWidth;
+    mcan.height = window.innerHeight;
+    mcw = mcan.width;
+    mch = mcan.height;
+    mcm = mcw > mch ? mch : mcw;
 } else {
-    mcm = mcw;
+    // Simulation environment (Node.js)
+    const { CanvasShim, requestAnimationFrameShim, keysDown } = require('./Sim/simulate');
+    mcan = new CanvasShim(800, 600);
+    mctx = mcan.getContext('2d');
+    mcw = mcan.width;
+    mch = mcan.height;
+    mcm = mcw > mch ? mch : mcw;
+    global.requestAnimationFrame = requestAnimationFrameShim;
 }
 let timer = 0;
 let yrCanShoot = true;
-let keysDown = [];
+if (typeof keysDown === 'undefined') {
+    keysDown = [];
+}
 let ledgeCount = 18;
 let bc = [102/255, 77/255, 51/255];
 yrm = mcm/20;
@@ -364,37 +374,71 @@ function physicsLoop(){
     }
 }
 
-physicsLoop();
-drawingLoop();
-
-function keyDownEvent(event){
-    let hasKey = false;
-    keysDown.forEach((keyDown)=>{
-        if (keyDown == event.key) {
-            hasKey = true;
-        }
-    });
-    if (!hasKey) {
-        keysDown.push(event.key);
-    }
+if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+    physicsLoop();
+    drawingLoop();
 }
-document.addEventListener("keydown", keyDownEvent);
 
-function keyUpEvent(event){
-    for (let i=0; i<keysDown.length; i++) {
-        if (keysDown[i] == event.key) {
-            keysDown.splice(i, 1);
+if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+    function keyDownEvent(event){
+        let hasKey = false;
+        keysDown.forEach((keyDown)=>{
+            if (keyDown == event.key) {
+                hasKey = true;
+            }
+        });
+        if (!hasKey) {
+            keysDown.push(event.key);
         }
     }
-}
-document.addEventListener("keyup", keyUpEvent);
+    document.addEventListener("keydown", keyDownEvent);
 
-function mcanMousemove(event){
-    if (yrCanShoot) {
-        let laser = new Laser(yourRobot.idCounter, yourRobot, true, event.x, event.y);
-        yourRobot.lasers.push(laser);
-        yourRobot.idCounter ++;
-        yrCanShoot = false;
+    function keyUpEvent(event){
+        for (let i=0; i<keysDown.length; i++) {
+            if (keysDown[i] == event.key) {
+                keysDown.splice(i, 1);
+            }
+        }
     }
+    document.addEventListener("keyup", keyUpEvent);
+
+    function mcanMousemove(event){
+        if (yrCanShoot) {
+            let laser = new Laser(yourRobot.idCounter, yourRobot, true, event.x, event.y);
+            yourRobot.lasers.push(laser);
+            yourRobot.idCounter ++;
+            yrCanShoot = false;
+        }
+    }
+    mcan.addEventListener("mousemove", mcanMousemove);
 }
-mcan.addEventListener("mousemove", mcanMousemove);
+
+// Export for simulation
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        Ledge,
+        YourRobot,
+        Robot,
+        Laser,
+        randomBetween,
+        colorString,
+        getDiagonal,
+        colorMix,
+        physicsLoop,
+        drawingLoop,
+        ledgeOrder,
+        yourRobot,
+        robots,
+        defaultRobot,
+        keysDown,
+        timer,
+        yrCanShoot,
+        velChange,
+        yrm,
+        mcw,
+        mch,
+        mcm,
+        mcan,
+        mctx
+    };
+}
