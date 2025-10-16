@@ -1,0 +1,16 @@
+{
+  "name": "RobotAttack",
+  "version": "0.1.0",
+  "description": "AI training on a simple HTML canvas game, inspired by DeepMind Atari experiments.",
+  "main": "code.js",
+  "scripts": {
+    "start": "open index.html",
+    "sim": "node Sim/simulate.js"
+  },
+  "directories": {
+    "sim": "Sim",
+    "nnet": "NNet"
+  },
+  "author": "Synchronicity89",
+  "license": "MIT"
+}
