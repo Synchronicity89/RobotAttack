@@ -250,6 +250,11 @@ let falling = true;
 function physicsLoop(){
     yourRobot.x += yourRobot.velX;
     yourRobot.y += yourRobot.velY;
+    // Clamp player robot position to stay within screen bounds
+    if (yourRobot.x < yrm/2) yourRobot.x = yrm/2;
+    if (yourRobot.x > mcw-yrm/2) yourRobot.x = mcw-yrm/2;
+    if (yourRobot.y < yrm/2) yourRobot.y = yrm/2;
+    if (yourRobot.y > mch-yrm/2) yourRobot.y = mch-yrm/2;
     falling = true;
     ledgeOrder.forEach((ledge)=>{
         if (yourRobot.y+yrm/2 > ledge.y*mch-yourRobot.velY-1) {
@@ -401,16 +406,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
         }
     }
     document.addEventListener("keyup", keyUpEvent);
-
-    function mcanMousemove(event){
-        if (yrCanShoot) {
-            let laser = new Laser(yourRobot.idCounter, yourRobot, true, event.x, event.y);
-            yourRobot.lasers.push(laser);
-            yourRobot.idCounter ++;
-            yrCanShoot = false;
-        }
-    }
-    mcan.addEventListener("mousemove", mcanMousemove);
+    // Mouse event listener is now managed in index.html for auto/manual mode switching
 }
 
 // Export for simulation
