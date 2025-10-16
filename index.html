@@ -17,6 +17,78 @@
     </head>
     <body>
         <canvas id="maincanvas"></canvas>
+        <button id="autoModeBtn" style="position:absolute;top:10px;left:10px;z-index:10;">Auto Mode</button>
+        <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
         <script src="code.js"></script>
+        <script>
+        let autoMode = false;
+        let policyModel = null;
+        document.getElementById('autoModeBtn').onclick = async function() {
+            if (!policyModel) {
+                policyModel = await tf.loadLayersModel('NNet/policy_model/model.json');
+            }
+            autoMode = !autoMode;
+            this.textContent = autoMode ? 'Manual Mode' : 'Auto Mode';
+        };
+
+        function getStateForAI() {
+            // Extract state as in training: [yourRobot.x, yourRobot.y, yourRobot.health, nearestRobot.x, nearestRobot.y, nearestRobot.health]
+            let nearest = defaultRobot;
+            robots.forEach(robot => {
+                if (robot.x**2 + robot.y**2 < nearest.x**2 + nearest.y**2) {
+                    nearest = robot;
+                }
+            });
+            return [
+                yourRobot.x / mcw,
+                yourRobot.y / mch,
+                yourRobot.health,
+                nearest.x / mcw,
+                nearest.y / mch,
+                nearest.health
+            ];
+        }
+
+        function aiStep() {
+            if (!autoMode || !policyModel || yourRobot.health <= 0) return;
+            const state = getStateForAI();
+            const stateTensor = tf.tensor([state]);
+            policyModel.predict(stateTensor).array().then(probsArr => {
+                const probs = probsArr[0];
+                // Pick highest-probability action
+                const actionIdx = probs.indexOf(Math.max(...probs));
+                const actions = ['w', 'a', 's', 'd', 'shoot'];
+                const action = actions[actionIdx];
+                if (action === 'shoot') {
+                    let nearest = defaultRobot;
+                    robots.forEach(robot => {
+                        if (robot.x**2 + robot.y**2 < nearest.x**2 + nearest.y**2) {
+                            nearest = robot;
+                        }
+                    });
+                    // Simulate mouse move
+                    let event = {x: nearest.x, y: nearest.y};
+                    if (yrCanShoot) {
+                        let laser = new Laser(yourRobot.idCounter, yourRobot, true, event.x, event.y);
+                        yourRobot.lasers.push(laser);
+                        yourRobot.idCounter ++;
+                        yrCanShoot = false;
+                    }
+                } else {
+                    // Simulate key press
+                    if (!keysDown.includes(action.toUpperCase())) {
+                        keysDown.push(action.toUpperCase());
+                    }
+                }
+            });
+        }
+
+        // Patch physicsLoop to call aiStep
+        const origPhysicsLoop = physicsLoop;
+        physicsLoop = function() {
+            aiStep();
+            origPhysicsLoop();
+        };
+        </script>
     </body>
 </html>

@@ -82,13 +82,12 @@ async function train(numEpisodes = 1000) {
         game.yourRobot.lasers = [];
         game.yourRobot.idCounter = 0;
         game.yourRobot.atBottom = false;
-        game.robots.forEach(r => {
-            r.health = 1;
-            r.x = Math.random() * game.mcw;
-            r.y = game.mch;
-            r.lasers = [];
-            r.idCounter = 0;
-        });
+        // Properly re-initialize robots array
+        game.robots.length = 0;
+        for (let i = 0; i < 12; i++) {
+            let robot = new game.Robot(i);
+            game.robots.push(robot);
+        }
         game.timer = 0;
         let done = false;
         let prevRobotCount = game.robots.length;
