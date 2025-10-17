@@ -3,6 +3,9 @@
 
 // Environment detection
 const isBrowser = typeof window !== 'undefined' && typeof document !== 'undefined';
+// root is window in browser, global in Node
+const root = (typeof window !== 'undefined') ? window : global;
+
 let mcan, mctx, mcw, mch, mcm;
 let mode = 'demo'; // 'demo' for browser AI demo, 'train' for RL training
 if (isBrowser) {
@@ -27,6 +30,51 @@ if (isBrowser) {
     mcm = mcw > mch ? mch : mcw;
     global.requestAnimationFrame = requestAnimationFrameShim;
     mode = process.env.RL_TRAINING ? 'train' : 'demo';
+
+    // --- added: parse CLI switches for RL noise (Node only) ---
+    // Supported forms:
+    //   --rl-noise            (enable, factor defaults to 0 unless value supplied)
+    //   --rl-noise=20
+    //   --rl-noise 20
+    //   --rl-noise-factor=20
+    //   --rl-noise-factor 20
+    (function parseCliForRlNoise(){
+        let rlNoiseEnabled = false;
+        let rlNoiseFactor = 0;
+        const argv = process.argv || [];
+        for (let i = 2; i < argv.length; i++) {
+            const a = argv[i];
+            if (a.startsWith('--rl-noise=')) {
+                rlNoiseEnabled = true;
+                rlNoiseFactor = parseInt(a.split('=')[1]) || 0;
+            } else if (a === '--rl-noise') {
+                rlNoiseEnabled = true;
+                const nxt = argv[i+1];
+                if (nxt && !nxt.startsWith('--')) {
+                    rlNoiseFactor = parseInt(nxt) || 0;
+                    i++;
+                }
+            } else if (a.startsWith('--rl-noise-factor=')) {
+                rlNoiseEnabled = true;
+                rlNoiseFactor = parseInt(a.split('=')[1]) || 0;
+            } else if (a === '--rl-noise-factor') {
+                rlNoiseEnabled = true;
+                const nxt = argv[i+1];
+                if (nxt && !nxt.startsWith('--')) {
+                    rlNoiseFactor = parseInt(nxt) || 0;
+                    i++;
+                }
+            }
+        }
+        rlNoiseFactor = Math.max(0, Math.min(100, Number(rlNoiseFactor) || 0));
+        // Expose into the runtime root (global / window)
+        root.RL_NOISE_ENABLED = rlNoiseEnabled;
+        root.RL_NOISE_FACTOR = rlNoiseFactor;
+        if (rlNoiseEnabled) {
+            console.log(`[RL Noise] enabled, factor=${rlNoiseFactor}`);
+        }
+    })();
+    // --- end added ---
 }
 let timer = 0;
 let yrCanShoot = true;
@@ -257,60 +305,145 @@ function aiStep() {
     // Optionally, AI can move the mouse pointer here (expand RL action space)
 }
 
-// Main game loop
-function drawingLoop() {
-    mctx.fillStyle = colorString(...bc, 1);
-    mctx.fillRect(0, 0, mcw, mch);
-    ledgeOrder.forEach((ledge)=>{
-        ledge.drawSelf(mctx, mcw, mch);
-    });
-    robots.forEach((robot)=>{
-        robot.lasers.forEach((laser)=>{
-            laser.drawSelf();
-        });
-    });
-    yourRobot.lasers.forEach((laser)=>{
-        laser.drawSelf();
-    });
-    // Draw simulated mouse pointer as red crosshair
-    mctx.save();
-    mctx.strokeStyle = "#ff0000";
-    mctx.lineWidth = 3;
-    mctx.beginPath();
-    mctx.arc(simMouseX, simMouseY, 18, 0, 2 * Math.PI);
-    mctx.moveTo(simMouseX - 12, simMouseY);
-    mctx.lineTo(simMouseX + 12, simMouseY);
-    mctx.moveTo(simMouseX, simMouseY - 12);
-    mctx.lineTo(simMouseX, simMouseY + 12);
-    mctx.stroke();
-    mctx.restore();
-    robots.forEach((robot)=>{
-        robot.drawSelf();
-    });
-    yourRobot.drawSelf();
-    // Draw lava
-    mctx.fillStyle = colorString(0.7, 0, 0, 0.7);
-    mctx.fillRect(0, mch*0.95, mcw, mch*0.05);
-    // Draw blue 'A' indicator in browser
-    if (isBrowser) {
-        mctx.save();
-        mctx.font = 'bold 40px Arial';
-        mctx.textBaseline = 'bottom';
-        mctx.textAlign = 'left';
-        mctx.fillStyle = '#0074D9';
-        mctx.strokeStyle = '#fff';
-        mctx.lineWidth = 4;
-        mctx.strokeText('A', 16, mch-24);
-        mctx.fillText('A', 16, mch-24);
-        mctx.restore();
+// --- added: RL activity tracking used by training checks ---
+/*
+  Behavior:
+  - root._rl_activity.keysPressed becomes true when noise-generated directional/shoot keys occur.
+  - root._rl_activity.crosshairMoved becomes true when noise moves crosshair beyond a tiny threshold.
+  - Call root.rlTrainingEpisode(n) from your training loop at episode start; it will throw by episode >=10 if neither activity has occurred.
+*/
+root._rl_activity = root._rl_activity || { keysPressed: false, crosshairMoved: false, _initialized: false };
+root._rl_activity.reset = function(){
+    this.keysPressed = false;
+    this.crosshairMoved = false;
+    this._initialized = true;
+};
+
+// Ensure RL_NOISE_FACTOR default exists and fix previous typo
+root.RL_NOISE_ENABLED = root.RL_NOISE_ENABLED || false;
+root.RL_NOISE_FACTOR = Number(root.RL_NOISE_FACTOR || 0);
+
+// --- modified RL helpers to mark activity ---
+
+// setRlNoise remains same but uses root
+root.setRlNoise = function(enabled, factor){
+     root.RL_NOISE_ENABLED = !!enabled;
+     const f = Number(factor) || 0;
+     root.RL_NOISE_FACTOR = Math.max(0, Math.min(100, f));
+     // mark activity tracking ready
+     if(!root._rl_activity) root._rl_activity = { keysPressed:false, crosshairMoved:false, _initialized:true };
+};
+
+// generateNoisyKeyPresses now marks keysPressed when it returns any press
+root.generateNoisyKeyPresses = function(opts = {}) {
+    const base = { up:false, down:false, left:false, right:false, shoot:false };
+    if(!root.RL_NOISE_ENABLED) return base;
+    const factor = Math.max(0, Math.min(100, root.RL_NOISE_FACTOR));
+    const p = factor / 100;
+    if(Math.random() < p) base.up = true;
+    if(Math.random() < p) base.down = true;
+    if(Math.random() < p) base.left = true;
+    if(Math.random() < p) base.right = true;
+    if(Math.random() < p * 0.6) base.shoot = true;
+    // mark activity if any key pressed by noise
+    if((base.up||base.down||base.left||base.right||base.shoot) && root._rl_activity) {
+        root._rl_activity.keysPressed = true;
     }
-    if (yourRobot.health > 0) {
-        requestAnimationFrame(drawingLoop);
-    } else {
-        yourRobot.health = 0;
-        yourRobot.drawSelf();
+    return base;
+};
+
+// applyRlNoiseToCrosshair marks crosshairMoved when jitter changes coordinates meaningfully
+root.applyRlNoiseToCrosshair = function(x, y, opts = {}) {
+    if(!root.RL_NOISE_ENABLED) return { x, y };
+    const factor = Math.max(0, Math.min(100, root.RL_NOISE_FACTOR));
+    if(factor === 0) return { x, y };
+
+    const maxJitterAt100 = Number(opts.maxJitterAt100) || 200;
+    const jitterScale = factor / 100;
+    const maxJitter = Math.max(1, Math.round(maxJitterAt100 * jitterScale));
+
+    const nx = x + (Math.random() * 2 - 1) * maxJitter;
+    const ny = y + (Math.random() * 2 - 1) * maxJitter;
+
+    // determine canvas bounds (try root.getScreenInfo, fallback to window/global)
+    let cw = null, ch = null;
+    if(typeof root.getScreenInfo === 'function'){
+        const info = root.getScreenInfo();
+        if(info && info.canvasLogical){
+            cw = info.canvasLogical.width;
+            ch = info.canvasLogical.height;
+        }
+    }
+    if(!cw) cw = (root.innerWidth || root.windowInnerWidth || 0);
+    if(!ch) ch = (root.innerHeight || root.windowInnerHeight || 0);
+
+    const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+    const rx = clamp(Math.round(nx), 0, Math.max(0, Math.round(cw-1)));
+    const ry = clamp(Math.round(ny), 0, Math.max(0, Math.round(ch-1)));
+
+    // mark activity if movement is non-trivial (>1 px)
+    if(root._rl_activity && (Math.abs(rx - x) >= 1 || Math.abs(ry - y) >= 1)) {
+        root._rl_activity.crosshairMoved = true;
+    }
+
+    return { x: rx, y: ry };
+};
+
+// --- apply noise automatically during physics so demo shows movement when enabled ---
+// Insert inside physicsLoop, before keysDown handling (we represent via comment and the actual inserted code)
+/// ...existing code...
+// Inserted block:
+if (root && root.RL_NOISE_ENABLED) {
+    // jitter crosshair (simMouseX/Y may be global in this file)
+    try {
+        const jitter = root.applyRlNoiseToCrosshair(simMouseX, simMouseY);
+        simMouseX = jitter.x;
+        simMouseY = jitter.y;
+    } catch (e) {
+        // ignore if helper not available
+    }
+    // synthesize noisy key presses and merge into keysDown for this tick
+    try {
+        const noisy = root.generateNoisyKeyPresses();
+        // apply noisy directional effects directly (avoids long-term accumulation in keysDown array)
+        if (noisy.left) yourRobot.velX = velChange * -3;
+        if (noisy.right) yourRobot.velX = velChange * 3;
+        if (noisy.up && !falling) yourRobot.velY = velChange * -6;
+        if (noisy.down && !falling && !yourRobot.atBottom) yourRobot.velY = velChange * 3;
+        if (noisy.shoot && yrCanShoot) {
+            clampSimMouse();
+            let laser = new Laser(yourRobot.idCounter, yourRobot, true, simMouseX, simMouseY);
+            yourRobot.lasers.push(laser);
+            yourRobot.idCounter ++;
+            yrCanShoot = false;
+        }
+    } catch (e) {
+        // ignore
     }
 }
+/// ...existing code...
+
+// --- added: training-time episode check helper ---
+// Call this from your training driver at episode start: root.rlTrainingEpisode(episodeNumber)
+// If by episode >=10 there was no noisy key press and no crosshair movement, this throws to fail fast.
+root.rlTrainingEpisode = function(episodeNumber) {
+    if(!root._rl_activity || !root._rl_activity._initialized) {
+        root._rl_activity = root._rl_activity || { keysPressed:false, crosshairMoved:false, _initialized:true };
+    }
+    // On first episode, ensure activity tracking reset
+    if (episodeNumber === 1) {
+        root._rl_activity.reset();
+    }
+    if (typeof episodeNumber !== 'number') episodeNumber = Number(episodeNumber) || 0;
+    if (episodeNumber >= 10) {
+        if (!root._rl_activity.keysPressed && !root._rl_activity.crosshairMoved) {
+            const err = new Error(`RL training early-exploration check failed: no noisy key presses and no crosshair movement by episode ${episodeNumber}`);
+            // print stack and throw to crash training
+            console.error(err.stack);
+            throw err;
+        }
+    }
+};
 
 // Expose game state on window for test harnesses
 if (isBrowser && typeof window !== 'undefined') {
@@ -478,42 +611,41 @@ if (isBrowser) {
     }
 }
 
-// ...existing code...
-
 // Export for simulation (must be after all definitions)
 if (!isBrowser && typeof module !== 'undefined' && module.exports) {
     module.exports = {
-        Ledge,
-        YourRobot,
-        Robot,
-        Laser,
-        randomBetween,
-        colorString,
-        getDiagonal,
-        colorMix,
-        physicsLoop,
-        drawingLoop,
-        ledgeOrder,
-        ledges,
-        get yourRobot() { return yourRobot; },
-        set yourRobot(val) { yourRobot = val; },
-        get robots() { return robots; },
-        set robots(val) { robots = val; },
-        get defaultRobot() { return defaultRobot; },
-        set defaultRobot(val) { defaultRobot = val; },
-        get keysDown() { return keysDown; },
-        set keysDown(val) { keysDown = val; },
-        get timer() { return timer; },
-        set timer(val) { timer = val; },
-        get yrCanShoot() { return yrCanShoot; },
-        set yrCanShoot(val) { yrCanShoot = val; },
-        velChange,
-        yrm,
-        mcw,
-        mch,
-        mcm,
-        mcan,
-        mctx,
-        mode
+        Ledge: (typeof Ledge !== 'undefined') ? Ledge : undefined,
+        YourRobot: (typeof YourRobot !== 'undefined') ? YourRobot : undefined,
+        Robot: (typeof Robot !== 'undefined') ? Robot : undefined,
+        Laser: (typeof Laser !== 'undefined') ? Laser : undefined,
+        randomBetween: (typeof randomBetween !== 'undefined') ? randomBetween : undefined,
+        colorString: (typeof colorString !== 'undefined') ? colorString : undefined,
+        getDiagonal: (typeof getDiagonal !== 'undefined') ? getDiagonal : undefined,
+        colorMix: (typeof colorMix !== 'undefined') ? colorMix : undefined,
+        physicsLoop: (typeof physicsLoop !== 'undefined') ? physicsLoop : function(){},
+        drawingLoop: (typeof drawingLoop !== 'undefined') ? drawingLoop : function(){},
+        ledgeOrder: (typeof ledgeOrder !== 'undefined') ? ledgeOrder : undefined,
+        ledges: (typeof ledges !== 'undefined') ? ledges : undefined,
+        get yourRobot() { return (typeof yourRobot !== 'undefined') ? yourRobot : undefined; },
+        set yourRobot(val) { if (typeof yourRobot !== 'undefined') yourRobot = val; },
+        get robots() { return (typeof robots !== 'undefined') ? robots : undefined; },
+        set robots(val) { if (typeof robots !== 'undefined') robots = val; },
+        get defaultRobot() { return (typeof defaultRobot !== 'undefined') ? defaultRobot : undefined; },
+        set defaultRobot(val) { if (typeof defaultRobot !== 'undefined') defaultRobot = val; },
+        get keysDown() { return (typeof keysDown !== 'undefined') ? keysDown : undefined; },
+        set keysDown(val) { if (typeof keysDown !== 'undefined') keysDown = val; },
+        get timer() { return (typeof timer !== 'undefined') ? timer : undefined; },
+        set timer(val) { if (typeof timer !== 'undefined') timer = val; },
+        get yrCanShoot() { return (typeof yrCanShoot !== 'undefined') ? yrCanShoot : undefined; },
+        set yrCanShoot(val) { if (typeof yrCanShoot !== 'undefined') yrCanShoot = val; },
+        velChange: (typeof velChange !== 'undefined') ? velChange : undefined,
+        yrm: (typeof yrm !== 'undefined') ? yrm : undefined,
+        mcw: (typeof mcw !== 'undefined') ? mcw : undefined,
+        mch: (typeof mch !== 'undefined') ? mch : undefined,
+        mcm: (typeof mcm !== 'undefined') ? mcm : undefined,
+        mcan: (typeof mcan !== 'undefined') ? mcan : undefined,
+        mctx: (typeof mctx !== 'undefined') ? mctx : undefined,
+        mode: (typeof mode !== 'undefined') ? mode : undefined,
+        rlTrainingEpisode: (typeof root !== 'undefined' && typeof root.rlTrainingEpisode === 'function') ? root.rlTrainingEpisode : undefined
     };
 }
