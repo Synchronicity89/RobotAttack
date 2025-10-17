@@ -42,13 +42,10 @@ const actions = ['w', 'a', 's', 'd', 'shoot'];
 function takeAction(actionIdx, game) {
     const action = actions[actionIdx];
     if (action === 'shoot') {
-        let nearest = game.defaultRobot;
-        game.robots.forEach(robot => {
-            if (robot.x**2 + robot.y**2 < nearest.x**2 + nearest.y**2) {
-                nearest = robot;
-            }
-        });
-        simulateMouseMove(nearest.x, nearest.y, game);
+        // Simulate mouse at center of screen for shooting
+        let centerX = game.mcw / 2;
+        let centerY = game.mch / 2;
+        simulateMouseMove(centerX, centerY, game);
     } else {
         // Simulate key press
         if (!game.keysDown.includes(action.toUpperCase())) {
@@ -59,11 +56,17 @@ function takeAction(actionIdx, game) {
 
 // --- Reward Function ---
 function getReward(game, prevRobotCount) {
-    // +1 for killing a robot, -1 for dying, small negative for each step
+    // +2 for killing a robot, -1 for dying, small negative for each step
     let reward = 0;
-    if (game.robots.length < prevRobotCount) reward += 1;
+    let killedRobot = game.robots.length < prevRobotCount;
+    if (killedRobot) reward += 2;
     if (game.yourRobot.health <= 0) reward -= 1;
-    reward -= 0.01; // time penalty
+    // If all robots are killed, reduce time penalty by three quarters
+    let timePenalty = 0.01;
+    if (game.robots.length === 0 && killedRobot) {
+        timePenalty *= 0.25;
+    }
+    reward -= timePenalty;
     return reward;
 }
 
@@ -123,6 +126,7 @@ async function train(numEpisodes = 1000) {
         let states = [];
         let actionsTaken = [];
         let rewards = [];
+        let timePenalties = [];
         let steps = 0;
 
         while (!done && steps < 2000) {
@@ -132,14 +136,31 @@ async function train(numEpisodes = 1000) {
             const actionIdx = tf.multinomial(tf.tensor(actionProbs), 1).dataSync()[0];
             takeAction(actionIdx, game);
             game.physicsLoop();
-            const reward = getReward(game, prevRobotCount);
+            const prevReward = getReward(game, prevRobotCount);
+            // Extract time penalty from reward function
+            let killedRobot = game.robots.length < prevRobotCount;
+            let timePenalty = 0.01;
+            if (game.robots.length === 0 && killedRobot) {
+                timePenalty *= 0.25;
+            }
+            // If reward was negative due to time penalty, track it
+            timePenalties.push(-timePenalty);
             prevRobotCount = game.robots.length;
-            totalReward += reward;
+            totalReward += prevReward;
             states.push(state);
             actionsTaken.push(actionIdx);
-            rewards.push(reward);
+            rewards.push(prevReward);
             steps++;
             if (game.yourRobot.health <= 0 || game.robots.length === 0) done = true;
+        }
+
+        // Retroactively reimburse 3/4 of time penalty if player wins
+        if (game.robots.length === 0 && game.yourRobot.health > 0) {
+            // Only reimburse if player won
+            let totalTimePenalty = timePenalties.reduce((a, b) => a + b, 0);
+            let reimbursement = totalTimePenalty * 0.75;
+            rewards[rewards.length - 1] += reimbursement;
+            totalReward += reimbursement;
         }
 
         // Policy Gradient Update (REINFORCE)
@@ -166,11 +187,10 @@ async function train(numEpisodes = 1000) {
 
         console.log(`Episode ${episode + 1}: Total Reward = ${totalReward}, Steps = ${steps}, Robots Remaining = ${game.robots.length}`);
     }
+    // Rotate and bump all policy_model folders before saving
+    bumpPolicyModelFolders('NNet');
     await policyNet.save('file://NNet/policy_model');
-    // Rotate history
-    const newModelDir = rotateModelHistory('NNet/policy_model', 5);
-    fs.renameSync('NNet/policy_model', newModelDir);
-    console.log(`Training complete. Model saved to ${newModelDir}`);
+    console.log(`Training complete. Model saved to NNet/policy_model`);
 }
 
 function rotateModelHistory(modelDir = 'NNet/policy_model', maxHistory = 5) {
@@ -187,6 +207,43 @@ function rotateModelHistory(modelDir = 'NNet/policy_model', maxHistory = 5) {
     let idx = 1;
     while (fs.existsSync(path.join(baseDir, `policy_model_${idx}`))) idx++;
     return path.join(baseDir, `policy_model_${idx}`);
+}
+
+function bumpPolicyModelFolders(baseDir) {
+    const prefix = 'policy_model';
+    const fs = require('fs');
+    const path = require('path');
+    // Find all folders matching policy_model and policy_model_N
+    let dirs = fs.readdirSync(baseDir)
+        .filter(f => f === prefix || (f.startsWith(prefix + '_') && fs.statSync(path.join(baseDir, f)).isDirectory()));
+    // Sort policy_model_N folders by descending N
+    let numbered = dirs.filter(f => f.startsWith(prefix + '_'))
+        .map(f => parseInt(f.split('_')[1]))
+        .filter(n => !isNaN(n))
+        .sort((a, b) => b - a);
+    // Use temporary names to avoid overwriting
+    numbered.forEach(n => {
+        const oldName = `${prefix}_${n}`;
+        const tmpName = `${prefix}_tmp_${n+1}`;
+        fs.renameSync(path.join(baseDir, oldName), path.join(baseDir, tmpName));
+    });
+    // Rename policy_model to temporary name
+    if (dirs.includes(prefix) && fs.statSync(path.join(baseDir, prefix)).isDirectory()) {
+        fs.renameSync(path.join(baseDir, prefix), path.join(baseDir, `${prefix}_tmp_1`));
+    }
+    // Now rename all temporary names to final names
+    numbered.forEach(n => {
+        const tmpName = `${prefix}_tmp_${n+1}`;
+        const finalName = `${prefix}_${n+1}`;
+        if (fs.existsSync(path.join(baseDir, tmpName))) {
+            fs.renameSync(path.join(baseDir, tmpName), path.join(baseDir, finalName));
+        }
+    });
+    const tmpName = `${prefix}_tmp_1`;
+    const finalName = `${prefix}_1`;
+    if (fs.existsSync(path.join(baseDir, tmpName))) {
+        fs.renameSync(path.join(baseDir, tmpName), path.join(baseDir, finalName));
+    }
 }
 
 if (require.main === module) {

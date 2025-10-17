@@ -1,5 +1,11 @@
 {
   "dependencies": {
     "@tensorflow/tfjs-node": "^4.22.0"
+  },
+  "devDependencies": {
+    "canvas": "^3.2.0",
+    "jest": "^30.2.0",
+    "jsdom": "^26.1.0",
+    "mocha": "^11.7.4"
   }
 }

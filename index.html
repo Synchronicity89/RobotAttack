@@ -1,123 +1,24 @@
 <!DOCTYPE html>
 <html>
     <head>
-        <title>2-26-2022</title>
+        <title>RobotAttack AI Demo</title>
         <style>
-            body{
+            body {
                 padding: 0;
                 margin: 0;
             }
-            canvas{
+            canvas {
                 padding: 0;
                 margin: 0;
                 width: 100%;
                 height: 100%;
+                display: block;
             }
         </style>
     </head>
     <body>
         <canvas id="maincanvas"></canvas>
-        <button id="autoModeBtn" style="position:absolute;top:10px;left:10px;z-index:10;">Manual Mode</button>
-        <div id="modeIndicator" style="position:fixed;bottom:10px;left:10px;z-index:20;font-size:32px;font-weight:bold;"></div>
         <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
         <script src="code.js"></script>
-        <script>
-        let autoMode = true;
-        let policyModel = null;
-        const autoModeBtn = document.getElementById('autoModeBtn');
-        const modeIndicator = document.getElementById('modeIndicator');
-        function updateModeUI() {
-            if (autoMode) {
-                autoModeBtn.textContent = 'Manual Mode';
-                modeIndicator.textContent = 'A';
-                modeIndicator.style.color = 'red';
-            } else {
-                autoModeBtn.textContent = 'Auto Mode';
-                modeIndicator.textContent = 'M';
-                modeIndicator.style.color = 'green';
-            }
-        }
-        updateModeUI();
-        autoModeBtn.onclick = async function() {
-            if (!policyModel) {
-                policyModel = await tf.loadLayersModel('NNet/policy_model/model.json');
-            }
-            autoMode = !autoMode;
-            updateMouseListener();
-            updateModeUI();
-        };
-
-        function getStateForAI() {
-            let nearest = defaultRobot;
-            robots.forEach(robot => {
-                if (robot.x**2 + robot.y**2 < nearest.x**2 + nearest.y**2) {
-                    nearest = robot;
-                }
-            });
-            return [
-                yourRobot.x / mcw,
-                yourRobot.y / mch,
-                yourRobot.health,
-                nearest.x / mcw,
-                nearest.y / mch,
-                nearest.health  
-            ];
-        }
-
-        let mcan = document.getElementById('maincanvas');
-        function mcanMousemove(event){
-            if (yrCanShoot) {
-                let laser = new Laser(yourRobot.idCounter, yourRobot, true, event.x, event.y);
-                yourRobot.lasers.push(laser);
-                yourRobot.idCounter ++;
-                yrCanShoot = false;
-            }
-        }
-        function updateMouseListener() {
-            mcan.removeEventListener("mousemove", mcanMousemove);
-            if (!autoMode) {
-                mcan.addEventListener("mousemove", mcanMousemove);
-            }
-        }
-        updateMouseListener();
-
-        function aiStep() {
-            if (!autoMode || !policyModel || yourRobot.health <= 0) return;
-            const state = getStateForAI();
-            const stateTensor = tf.tensor([state]);
-            policyModel.predict(stateTensor).array().then(probsArr => {
-                const probs = probsArr[0];
-                const actionIdx = probs.indexOf(Math.max(...probs));
-                const actions = ['w', 'a', 's', 'd', 'shoot'];
-                const action = actions[actionIdx];
-                if (action === 'shoot') {
-                    let nearest = defaultRobot;
-                    robots.forEach(robot => {
-                        if (robot.x**2 + robot.y**2 < nearest.x**2 + nearest.y**2) {
-                            nearest = robot;
-                        }
-                    });
-                    let event = {x: nearest.x, y: nearest.y};
-                    if (yrCanShoot) {
-                        let laser = new Laser(yourRobot.idCounter, yourRobot, true, event.x, event.y);
-                        yourRobot.lasers.push(laser);
-                        yourRobot.idCounter ++;
-                        yrCanShoot = false;
-                    }
-                } else {
-                    if (!keysDown.includes(action.toUpperCase())) {
-                        keysDown.push(action.toUpperCase());
-                    }
-                }
-            });
-        }
-
-        // Patch physicsLoop to call aiStep
-        const origPhysicsLoop = physicsLoop;
-        physicsLoop = function() {
-            aiStep();
-            origPhysicsLoop();
-        };
-        </script>
     </body>
 </html>
