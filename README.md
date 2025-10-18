@@ -20,9 +20,10 @@ This repository is inspired by DeepMind's approach to Atari games, where AI agen
 - Optional for training: NVIDIA GPU + CUDA/cuDNN (TBD exact versions)
 
 ## Quick Start
-- Human game: Open index.html in a browser (file:// or via a simple static server). In this dev container, you can run a local server (TBD) or open manually on the host.
-- Tests and servers: TBD until Sim/, AIDemo/, and servers are added.
-- Seeds: If a seed is supported (future), pass via CLI flag or query param (?seed=1234) (TBD).
+- Open the Control Panel (Human server) — TBD exact command/URL.
+  - From the Control Panel, launch the Human Game (index.html) using the canonical world configuration, start/stop recording, and replay recordings in the AI Demo (AI disabled for replay).
+- Seeds: When supported, pass a seed via query param (?seed=1234) or Control Panel input (TBD).
+- Tests and other servers are TBD until Phase 2–3 land.
 
 ## Project Roadmap (high-level)
 - Phase 1: Finish Human game implementation + Human web server + Control Panel
@@ -50,7 +51,7 @@ This repository is inspired by DeepMind's approach to Atari games, where AI agen
 - Canvas and canvas size: In the simulation/RL implementation, there is no HTML canvas. Interpret “canvas size” as world dimensions (width, height) used consistently by all implementations.
 
 ## Structure and Rules
-- Human implementation (Root): The mouse controls where the player robot shoots via mousemove events. The player robot continuously fires when the mouse moves; if the mouse is not moved, it does not fire. A crosshair cursor will be added after this commit. The player wins if all attacking robots are destroyed first; otherwise, the player loses.
+- Human implementation (Root): The mouse controls where the player robot shoots via mousemove events. The player fires one initial shot at frame 0 toward the canonical crosshairStart (200,200), then continues to fire on mousemove subject to cooldown. A crosshair cursor will be added after this commit. The player wins if all attacking robots are destroyed first; otherwise, the player loses.
 - No sharing of code between implementations: The three implementations must not share runtime/game-logic code. They may share non-executable artifacts such as test specifications, schemas, and configuration files used for verification.
 
 ## Essential Game Logic Invariants (current human implementation)
@@ -65,8 +66,9 @@ This repository is inspired by DeepMind's approach to Atari games, where AI agen
   - Self-heal: if health < 1 - 1/3600 then health += 1/3600 per frame
   - Bottom hazard: if y > canvasHeight - 1.5*yrm then health -= 1/180 per frame
 - Shooting (player)
-  - Cooldown: can shoot at most once every 10 physics frames
-  - Trigger: only on mousemove; shot originates from player toward the event’s (x,y)
+  - Initial shot: at frame 0, fire once toward crosshairStart (canonical: 200,200).
+  - Cooldown: can shoot at most once every 10 physics frames thereafter.
+  - Trigger (subsequent): on mousemove; shot originates from player toward the event’s (x,y), mapped to canvas coordinates.
   - Laser: color blue; speed 10 px/frame; removed if outside canvas
   - Crosshair initial position: (200, 200) canvas pixels at frame 0; all implementations must use this exact initial aim point since shooting starts immediately.
 - Enemies (Robot)
@@ -76,7 +78,7 @@ This repository is inspired by DeepMind's approach to Atari games, where AI agen
   - On hit (their laser on player): player health -= 0.05; robot heals +0.2 (capped at 1)
   - Shooting schedule: robot fires based on per-robot periods/offsets (st.d, st.v)
   - Enemy lasers: color yellow; advance at robot speed (3*velChange); removed if outside canvas
-  - Note: a laserSpeed property exists but is unused (current behavior is canonical)
+  - Note: a laserSpeed property exists but is currently unused; per the Proposed Fixes it will govern enemy laser travel.
 - Collisions
   - Player lasers vs enemies: check against the single “nearest-to-origin” robot’s AABB (size ≈ yrm); if hit => that robot health -= 0.2
     - Note: nearest-to-origin selection (not nearest-to-laser) is a current behavior and used as canonical for parity
@@ -167,6 +169,17 @@ The following changes will be applied to the human implementation (canonical) to
 3. Training Loop
    - Automate repeated gameplay, collecting state, actions, and rewards.
    - Use RL or suitable algorithms to improve performance. Prefer TensorFlow with GPU if available; otherwise, utilize all logical CPUs for parallel training when possible.
+   - Initial exploration policy (training-time, canonical default):
+     - Inputs: start with high activity in W/A/S/D keypresses to induce movement; use F sparingly (low probability) so braking is rare early on.
+     - Aiming/shooting: apply crosshair movement noise to invoke frequent mousemove-triggered shots.
+     - Annealing: gradually reduce input rates and crosshair jitter as training progresses (e.g., linear or exponential schedule) so the learned policy sculpts behavior down to efficient actions.
+     - Parity note: this policy is for training and demos only; parity tests still use deterministic, scripted inputs.
+   - Suggested training config (TBD file path, e.g., ./config/training.json):
+     - keysPerSecond: { "w": <num>, "a": <num>, "s": <num>, "d": <num>, "f": <num small> }
+     - keyHoldFramesMean/Std: number/number
+     - crosshairJitterPx: number (amplitude of position jitter)
+     - crosshairJitterHz: number (updates per second)
+     - explorationAnneal: { "type": "linear|exp", "start": <num>, "end": <num>, "steps": <num> }
 
 4. Evaluation & Benchmarking
    - Compare AI performance against baselines (random or scripted agents).
@@ -294,7 +307,10 @@ Pull requests and issues are welcome. Please see the development plan above for 
   - A+D => cancel; W only when grounded; S only when grounded and not at bottom; F overrides horizontal inputs and zeroes velX while held
 - Human: real keyboard/mouse events
 - Sim/AIDemo: programmatic events via an input queue with timestamps (frame indices)
-- Crosshair default: until the first mousemove event, aim uses world.crosshairStart (canonical: 200,200).
+- Crosshair default: until the first mousemove event, aim uses world.crosshairStart (canonical: 200,200). The frame-0 initial shot also uses this point.
+- Training-time default exploration (for Sim/NNet and AI Demo showcases):
+  - Generate frequent W/A/S/D key events; generate fewer F events; apply crosshair jitter to trigger shots.
+  - Exploration rates and annealing sourced from training config (see Training Loop).
 - Common event shape (suggested):
   - type: "keydown" | "keyup" | "mousemove" | "action"
   - payload: { key?: "w"|"a"|"s"|"d"|"f", x?: number, y?: number }
@@ -319,7 +335,9 @@ Pull requests and issues are welcome. Please see the development plan above for 
 - Collision detection policy:
   - Lasers use continuous collision detection (segment vs AABB)
   - Player grounding snaps to ledge top with epsilon to avoid jitter
-- Edge conditions: objects removed when outside [0,width]x[0,height]
+- Edge conditions:
+  - Lasers are removed when outside [0,width]x[0,height].
+  - Robots follow the configured enemyBoundaryMode; they are not culled offscreen in "original" mode.
 
 ## Termination Conditions
 - Canonical signaling:
