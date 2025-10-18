@@ -25,10 +25,26 @@ This repository is inspired by DeepMind's approach to Atari games, where AI agen
 - Seeds: If a seed is supported (future), pass via CLI flag or query param (?seed=1234) (TBD).
 
 ## Project Roadmap (high-level)
-- Phase 1: Add Sim/ with headless game logic, Jest setup, seeded RNG, and parity tests.
-- Phase 2: Add AIDemo/ with its web server and telemetry writing.
-- Phase 3: Add NNet/ with training loop (CPU/GPU), reward shaping, and evaluation.
-- Phase 4: Harden parity tests, performance, and documentation (schemas finalized).
+- Phase 1: Finish Human game implementation + Human web server + Control Panel
+  - Implement the canonical fixes: single fixed-timestep loop (physics -> render), continuous collision detection for lasers so shots reliably hit targets, win/loss signage with draw handling, seeded PRNG support, input conflict policy, DPI-correct mouse mapping, ledge snap, clamp player, configurable enemy boundary modes, and safe collection updates (no in-loop splicing).
+  - Deliver the Human web server and Control Panel page to launch the game, start/stop recording, and manage replays/parity checks (TBD).
+  - Adopt world.json and human-telemetry.json as specified; write canonical telemetry on session end.
+
+- Phase 2: Add AIDemo/ with its web server, telemetry, and replay capability
+  - Build AIDemo server and UI; load recordings from the Control Panel and replay deterministically with AI disabled.
+  - Ensure AIDemo consumes the canonical world.json and writes aidemo-telemetry.json.
+  - Update the README with any new canonical info discovered while finishing the Human implementation (e.g., finalized parameters, schemas, or policies).
+
+- Phase 3: Add Sim/ with headless game logic, Jest setup, seeded RNG, and parity tests
+  - Implement a headless simulation (no code sharing) with step() API and seeded PRNG.
+  - Create Jest tests for determinism and cross-implementation parity (against Human/AIDemo recordings and golden snapshots).
+  - CI and scripts to run parity tests locally (TBD).
+
+- Phase 4: Add NNet/ with training loop and evaluation (optional continuation)
+  - Implement training (CPU/GPU), reward shaping, episode management, and evaluation baselines.
+
+- Phase 5: Hardening and documentation (optional continuation)
+  - Harden parity tests and performance; finalize schemas; expand docs and Control Panel workflows.
 
 ## Glossary / Definitions
 - Canvas and canvas size: In the simulation/RL implementation, there is no HTML canvas. Interpret “canvas size” as world dimensions (width, height) used consistently by all implementations.
@@ -52,6 +68,7 @@ This repository is inspired by DeepMind's approach to Atari games, where AI agen
   - Cooldown: can shoot at most once every 10 physics frames
   - Trigger: only on mousemove; shot originates from player toward the event’s (x,y)
   - Laser: color blue; speed 10 px/frame; removed if outside canvas
+  - Crosshair initial position: (200, 200) canvas pixels at frame 0; all implementations must use this exact initial aim point since shooting starts immediately.
 - Enemies (Robot)
   - Spawn: 12 robots at start; health = 1; speed = 3*velChange
   - Motion target: orbits around player toward distance tarD ∈ [mcm/8, mcm/2]
@@ -68,6 +85,75 @@ This repository is inspired by DeepMind's approach to Atari games, where AI agen
   - 18 ledges, random positions, sorted by y ascending; landing when player bottom is near ledge y within ±(velY+1) and horizontally within ledge width plus player half-size
 - Rendering (human)
   - Background fill; ledges; lasers; robots; player; HUD bar at bottom
+
+## Canonical Human Implementation: Proposed Fixes for Determinism and Parity
+The following changes will be applied to the human implementation (canonical) to preserve gameplay feel while improving determinism and parity. Other implementations will target this behavior.
+
+- Win/Loss signaling and draw handling
+  - On game end, render a full-screen message:
+    - Green “Win” if all enemies are destroyed (robots.length === 0).
+    - Red “Loss” if player health <= 0.
+    - If both occur on the same frame, treat as Win but set gameDrawn = true in captured data.
+  - Capture outcome in telemetry (see schema).
+
+- Player laser hit-test anomaly
+  - Change to line-segment vs AABB collision for the laser’s travel between frames.
+  - On multiple hits in the same step, apply damage to the nearest intersection along the laser path and remove the laser.
+  - Question: Should player lasers ever pierce multiple enemies? Proposal: No (single-hit), for determinism.
+
+- Enemy laser speed vs unused laserSpeed
+  - Use laserSpeed as a multiplier on robot.speed for enemy laser travel: enemyLaserStep = laserSpeedMultiplier * robot.speed.
+  - Default multiplier = 1 (preserves current feel). Allowed range (TBD, e.g., 0.5–3). Seeded randomness can vary multiplier per robot.
+
+- Nondeterministic randomness
+  - Introduce a deterministic PRNG (e.g., mulberry32/xorshift) seeded per run.
+  - Default behavior: fresh seed per human play for variety; tests/replays: fixed seed.
+  - Recording and replay:
+    - Record initial seed, world config, and input timeline to a JSON file.
+    - The AI Demo can replay this recording exactly with AI disabled.
+    - Provide a Control Panel page (served by the human server) to start/stop recording, launch AI Demo replays, and run parity checks. Details TBD.
+
+- Dual rAF loops and order sensitivity
+  - Use a single game loop with a fixed-timestep accumulator:
+    - Physics: advance in fixed frames (e.g., 60 FPS equivalent), possibly multiple steps per render.
+    - Render: after physics steps, draw current state.
+  - Order is always physics then render.
+
+- In-loop array mutation
+  - Avoid splicing while iterating. Either:
+    - Iterate backwards with index loops; or
+    - Collect removals and batch-remove post-iteration.
+  - This applies to lasers and robots.
+
+- Input conflict handling (canonical policy)
+  - Horizontal (A/D): if both pressed, cancel out (net 0). Otherwise apply ±3*velChange.
+  - Vertical (W/S): W applies jump impulse only when grounded; S initiates drop only when grounded and not at bottom.
+  - Brake (F): overrides horizontal motion; sets velX = 0 while held, both on ground and mid-air. Other horizontal inputs are ignored while F is held.
+  - Multiple inputs can co-exist per-axis as above.
+
+- Mouse coordinates and DPI/layout coupling
+  - Map mouse to canvas coordinates using getBoundingClientRect and devicePixelRatio.
+  - Optionally support Pointer Lock for consistent relative aiming (TBD, off by default).
+
+- Frame-rate dependence
+  - Adopt fixed-timestep physics decoupled from render. Game speed is independent of monitor refresh rate.
+
+- Ledge collision tolerance and hovering
+  - On grounding, snap player.y to ledge top exactly and reset velY = 0.
+  - Use a small positional epsilon to avoid hover/stick jitter. Swept vertical collision preferred (TBD).
+
+- Mid-air braking
+  - Support F mid-air brake (horizontal only), as above. Documented in invariants.
+
+- Laser tunneling risk
+  - Use continuous collision detection (segment vs AABB) for both player and enemy lasers to prevent tunneling.
+
+- Robots unconstrained by arena bounds
+  - Clamp the player to the screen at all times.
+  - Add configurable enemy boundary behavior (see world schema):
+    - original: current behavior; enemies may go offscreen.
+    - bounce: reflect off edges with damping (not perfectly elastic).
+    - splat: stop component velocity against the wall; cannot leave screen.
 
 ## Software Design & Development Plan
 1. Game Simulation
@@ -90,6 +176,10 @@ This repository is inspired by DeepMind's approach to Atari games, where AI agen
    - Design for easy modification of rules, models, and parameters.
 
 6. GUI Design
+   - Control Panel (human server): A simple page to
+     - Start/stop recording a human play session.
+     - Launch AI Demo replays of recorded sessions.
+     - Compare telemetry/parity summaries (TBD).
    - Provide two simple Node web servers: one for the human game (`index.html`), one for the AI Demo. Each server records measured client rendering info (e.g., canvas/world dimensions) into a JSON file for verification.
    - Canonical source of truth: The human game server’s recorded dimensions are canonical. The AI Demo should accept expected dimensions as input and fail fast on mismatch, while also writing its measured dimensions for comparison.
    - The simulation consumes the same world dimensions (not a DOM canvas) and should validate against the canonical dimensions.
@@ -114,8 +204,17 @@ This repository is inspired by DeepMind's approach to Atari games, where AI agen
    - The AI Demo is intended to run on the same screen as the human game, so captured dimensions are applicable. Running elsewhere is possible with additional work.
 
 ## Getting Started
-1. Open `index.html` in a browser to play the game manually.
-2. Planned components (`Sim/`, `NNet/`, `AIDemo/`) may not be present yet. They will be added in future commits alongside their servers, tests, and documentation.
+1. Open the Control Panel (Human server) — TBD exact command/URL.
+   - From the Control Panel you can:
+     - Launch the Human Game (index.html) using the canonical world configuration.
+     - Start/stop recording a human play session.
+     - Launch AI Demo replays of a selected recording (AI disabled for replay).
+2. Play the Human Game
+   - Use WASD and mouse; F to brake. Firing occurs on mousemove. Win/Loss signage appears at end; simultaneous death + all enemies destroyed is treated as Win with gameDrawn = true.
+3. Record and Replay (optional)
+   - Start recording in the Control Panel, play a session, stop recording, then replay it in the AI Demo to verify determinism and parity across implementations.
+4. Planned components
+   - Commands/servers for `Sim/`, `NNet/`, and `AIDemo/` will be added in future commits along with documentation in this section.
 
 ## Contributing
 Pull requests and issues are welcome. Please see the development plan above for guidance on where to contribute.
@@ -129,6 +228,9 @@ Pull requests and issues are welcome. Please see the development plan above for 
   - dpr: number (devicePixelRatio) (TBD source)
   - seed: number | string (TBD)
   - impl: "human" | "aidemo" | "sim"
+  - enemyBoundaryMode: "original" | "bounce" | "splat"
+  - clampPlayer: boolean
+  - crosshairStart: { x: number, y: number } (canonical default: { "x": 200, "y": 200 })
   - timestamp: ISO-8601 string
 - Example:
   ```json
@@ -138,24 +240,33 @@ Pull requests and issues are welcome. Please see the development plan above for 
     "dpr": 1,
     "seed": 1234,
     "impl": "human",
+    "enemyBoundaryMode": "original",
+    "clampPlayer": true,
+    "crosshairStart": { "x": 200, "y": 200 },
     "timestamp": "2025-01-01T00:00:00.000Z"
   }
   ```
 
 ## Telemetry JSON Schema (for verification)
-- Purpose: each web server writes a telemetry JSON capturing measured client info
+- Purpose: each web server writes a telemetry JSON capturing measured client info and results
 - Suggested paths (TBD): ./data/human-telemetry.json, ./data/aidemo-telemetry.json
 - Fields:
+  - runId: string (unique per session; e.g., UUID)
   - measuredWidth, measuredHeight: number
   - clientWidth, clientHeight: number (CSS layout size) (TBD)
   - dpr: number
   - impl: string
   - userAgent: string (optional)
   - seed: number | string (optional)
+  - outcome: "win" | "loss"
+  - gameDrawn: boolean
+  - frames: integer total physics frames
+  - durationMs: number (wall-clock)
   - timestamp: ISO-8601 string
 - Example:
   ```json
   {
+    "runId": "2f1c1c3e-5c4b-4b7e-ae6b-7da8b3b1b5af",
     "measuredWidth": 1920,
     "measuredHeight": 1080,
     "clientWidth": 1920,
@@ -163,21 +274,27 @@ Pull requests and issues are welcome. Please see the development plan above for 
     "dpr": 1,
     "impl": "human",
     "userAgent": "Mozilla/5.0 ...",
-    "seed": 1234,
+    "seed": 1337,
+    "outcome": "win",
+    "gameDrawn": false,
+    "frames": 4821,
+    "durationMs": 81234,
     "timestamp": "2025-01-01T00:00:00.000Z"
   }
   ```
 
 ## Determinism and RNG Seeding Policy
-- All implementations must accept a seed and use a deterministic PRNG
-- Default seed: 1337 (TBD)
-- Seed ingress: CLI flag (sim), server arg/env var (human, aidemo), or query param (?seed=1337) (TBD)
-- PRNG: a small, fast deterministic function (e.g., mulberry32, xorshift) or a library (TBD)
-- Tests use fixed seeds; parity requires identical sequences/events across implementations
+- PRNG: deterministic (mulberry32/xorshift; TBD exact function)
+- Default seed: fresh per human session; tests/replays: fixed seed
+- Seed ingress: CLI flag (sim), env var/server arg or query param (?seed=1337) for human/aidemo (TBD)
+- Recording includes the exact seed used
 
 ## Input Abstraction
+- Conflict resolution (canonical):
+  - A+D => cancel; W only when grounded; S only when grounded and not at bottom; F overrides horizontal inputs and zeroes velX while held
 - Human: real keyboard/mouse events
 - Sim/AIDemo: programmatic events via an input queue with timestamps (frame indices)
+- Crosshair default: until the first mousemove event, aim uses world.crosshairStart (canonical: 200,200).
 - Common event shape (suggested):
   - type: "keydown" | "keyup" | "mousemove" | "action"
   - payload: { key?: "w"|"a"|"s"|"d"|"f", x?: number, y?: number }
@@ -185,10 +302,12 @@ Pull requests and issues are welcome. Please see the development plan above for 
 - Parity: given identical event timelines and seeds, outcomes must match
 
 ## Simulation Stepping Contract
-- API (suggested):
-  - init({ world, seed }): initialize with world dims and RNG seed
-  - reset(initialState?): return canonical initial state
-  - step(action, frames=1): advance N frames, returns { state, reward, done, info }
+- Loop and timing model (canonical):
+  - Fixed-timestep physics; single loop per frame (physics -> render); possibly multiple physics steps per render to catch up
+  - API (suggested):
+    - init({ world, seed }): initialize with world dims and RNG seed
+    - reset(initialState?): return canonical initial state
+    - step(action, frames=1): advance N frames, returns { state, reward, done, info }
 - Time: frames are the unit; accelerated mode processes many frames per call while preserving event ordering
 
 ## Physics and Collision Details (current human implementation)
@@ -197,10 +316,14 @@ Pull requests and issues are welcome. Please see the development plan above for 
 - Jump velocity: -6*velChange; horizontal speed: ±3*velChange
 - Friction when grounded: velX *= 0.95
 - Player laser speed: 10 px/frame; enemy laser speed: 3*velChange (current behavior)
-- Collision model: axis-aligned bounding boxes as described in invariants
+- Collision detection policy:
+  - Lasers use continuous collision detection (segment vs AABB)
+  - Player grounding snaps to ledge top with epsilon to avoid jitter
 - Edge conditions: objects removed when outside [0,width]x[0,height]
 
 ## Termination Conditions
+- Canonical signaling:
+  - Win: “Win” in green; Loss: “Loss” in red; simultaneous death and all-enemies-destroyed is treated as Win with gameDrawn = true.
 - Loss: player health <= 0 (physics/drawing loops stop)
 - Win: intended when all enemies destroyed (robots.length === 0), but not currently implemented as a termination; loop continues (TBD to formalize and signal “win”)
 - Episode end (sim): must emit done=true on loss or win (TBD to align human/aidemo)
@@ -225,3 +348,17 @@ Pull requests and issues are welcome. Please see the development plan above for 
 - If remainingEnemies = 0 (win): scaledPenalty = 0; baseReward = +1; final = +1
 - If remainingEnemies = 3: scaledPenalty = timePenalty * (remainingEnemies/initialEnemies) = -5.0 * (3/12) = -1.25; baseReward = -1 on loss or +1 on win; example final (loss) = -2.25
 - Exact constants TBD; intent: no time penalty if all enemies are destroyed
+
+## Recording and Replay
+- Recording file (suggested path): ./data/recordings/<runId>.json
+- Contents:
+  - world: the world.json used
+  - seed: the run seed
+  - inputs: ordered list of { frame, type, payload }
+  - outcome, gameDrawn, frames, durationMs
+- Replay:
+  - AI Demo loads a recording, disables AI control, replays inputs deterministically using the same world and seed
+  - Used to demonstrate parity and reassure manual testers
+- Control Panel (human server):
+  - Buttons for “Start Recording,” “Stop Recording,” “Replay in AI Demo,” with file selector
+  - Optional “Parity Check” runs both human and sim with the same seed and input timeline and compares snapshots (TBD)
