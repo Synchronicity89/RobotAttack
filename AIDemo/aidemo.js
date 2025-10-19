@@ -84,7 +84,8 @@
         player: {
             x: 0, y: 0, vx: 0, vy: 0, atBottom: false, health: 1, idCounter: 0
         },
-        lasers: [] // { x,y, angle, id }
+        lasers: [],
+        robots: [] // added: demo robots for visuals
     };
     // expose for tests
     if (typeof window !== 'undefined') window.demoState = state;
@@ -113,6 +114,39 @@
                 state.lasers.push({ x: state.player.x, y: state.player.y, angle, id: state.player.idCounter++ });
                 state.yrCanShoot = false;
             }
+        }
+    }
+
+    // Simple Robot (visual + orbit motion only; no enemy lasers yet)
+    class Robot {
+        constructor(id, mcw, mch, mcm, velChange) {
+            this.id = id;
+            this.health = 1;
+            this.x = rand() * mcw;
+            this.y = mch;
+            this.speed = velChange * 3;
+            this.tarD = randomBetween(mcm / 8, mcm / 2, 1);
+        }
+        update(player, velChange) {
+            const angle = Math.atan2(this.y - player.y, this.x - player.x);
+            const dx = this.x - player.x, dy = this.y - player.y;
+            const distance = Math.hypot(dx, dy) || 1e-6;
+            const newA = angle + this.speed / distance;
+            const newD = distance + (this.tarD - distance) / (100 / velChange);
+            this.x = player.x + Math.cos(newA) * newD;
+            this.y = player.y + Math.sin(newA) * newD;
+            // slow health decay (future removal hook)
+            this.health -= 1 / 1200;
+        }
+        draw(ctx, yrm) {
+            // body
+            ctx.fillStyle = 'rgba(128,128,128,1)';
+            ctx.fillRect(this.x - yrm / 2, this.y - yrm / 2, yrm, yrm);
+            // outline (health-tinted)
+            const h = Math.max(0, Math.min(1, this.health));
+            ctx.strokeStyle = `rgba(${Math.floor(255 * h)},${Math.floor(255 * h)},0,1)`;
+            ctx.lineWidth = Math.max(1, Math.floor(yrm / 8));
+            ctx.strokeRect(this.x - yrm / 4, this.y - yrm / 4, yrm / 2, yrm / 2);
         }
     }
 
@@ -182,7 +216,13 @@
             if (L.x < 0 || L.x > mcw || L.y < 0 || L.y > mch) state.lasers.splice(i, 1);
         }
 
-        // Cooldown
+        // Update robots (orbit around player)
+        for (let i = state.robots.length - 1; i >= 0; i--) {
+            const rb = state.robots[i];
+            rb.update(state.player, state.velChange);
+            if (rb.health < 0) state.robots.splice(i, 1); // optional cleanup
+        }
+
         state.timer++;
         if (state.timer % 10 === 0) state.yrCanShoot = true;
         state.frame++;
@@ -207,6 +247,11 @@
             ctx.moveTo(L.x - Math.cos(L.angle) * 10, L.y - Math.sin(L.angle) * 10);
             ctx.lineTo(L.x + Math.cos(L.angle) * 10, L.y + Math.sin(L.angle) * 10);
             ctx.stroke();
+        }
+
+        // Robots
+        for (const rb of state.robots) {
+            rb.draw(ctx, state.yrm);
         }
 
         // Player
@@ -280,8 +325,8 @@
 
         recording = await loadRecording();
 
-        // Seed RNG deterministically for ledges
-        const seedParam = sp.get('seed');
+        // Seed RNG deterministically for ledges (and robots)
+        const seedParam = (new URLSearchParams(window.location.search)).get('seed');
         const seed = seedParam != null ? Number(seedParam)
             : (recording && typeof recording.seed === 'number') ? recording.seed
                 : null;
@@ -302,6 +347,16 @@
                 ledges[highest.item].id = ledgeOrder.length;
                 ledgeOrder.push(ledges[highest.item]);
                 ledges.splice(highest.item, 1);
+            }
+        }
+
+        // Create robots deterministically
+        {
+            state.robots = [];
+            const mcw = canvas.width, mch = canvas.height;
+            const mcm = Math.min(mcw, mch);
+            for (let i = 0; i < 12; i++) {
+                state.robots.push(new Robot(i, mcw, mch, mcm, state.velChange));
             }
         }
 
