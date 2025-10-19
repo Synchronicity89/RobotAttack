@@ -8,16 +8,20 @@ const dataDir = path.join(root, 'data');
 const configDir = path.join(root, 'config');
 const aidemoDir = path.join(root, 'AIDemo');
 
+const PORT = process.env.PORT || 3001;
+
 if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 if (!fs.existsSync(configDir)) fs.mkdirSync(configDir, { recursive: true });
 
 app.use(express.json());
-app.use(express.static(root));
 
-app.get('/', (_req, res) => {
-  res.sendFile(path.join(root, 'control-panel.html'));
-});
+// Strict static: only AI Demo pages and assets
+app.use('/AIDemo', express.static(aidemoDir));
 
+// Expose shared helper if referenced by AIDemo
+app.get('/humanLib.js', (_req, res) => res.sendFile(path.join(root, 'humanLib.js')));
+
+// World for AI Demo
 app.get('/world.json', (_req, res) => {
   const p = path.join(configDir, 'world.json');
   if (fs.existsSync(p)) {
@@ -32,7 +36,7 @@ app.get('/world.json', (_req, res) => {
   }
 });
 
-// List available recordings for convenience
+// List recordings and serve them
 app.get('/recordings', (_req, res) => {
   const recDir = path.join(dataDir, 'recordings');
   const files = fs.existsSync(recDir)
@@ -40,9 +44,11 @@ app.get('/recordings', (_req, res) => {
     : [];
   res.json({ files });
 });
+app.use('/data/recordings', express.static(path.join(dataDir, 'recordings')));
 
-const port = process.env.PORT || 3001;
-app.listen(port, () => {
-  console.log(`AI Demo server running: http://localhost:${port}/`);
-  console.log(`Launch AI Demo:         http://localhost:${port}/AIDemo/index.html`);
+// Fallback 404 for isolation
+app.use((_req, res) => res.status(404).send('Not Found'));
+
+app.listen(PORT, () => {
+  console.log(`AI Demo server running: http://localhost:${PORT}/AIDemo/index.html`);
 });

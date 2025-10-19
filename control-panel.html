@@ -14,29 +14,41 @@
   <body>
     <h1>RobotAttack Control Panel</h1>
 
-    <div class="row">
+    <section>
+      <h2>Launch Human Game</h2>
       <label>Seed (optional): <input id="seed" type="number" placeholder="fresh per run"></label>
       <button id="launch">Launch Human Game</button>
-      <button id="open-telemetry">Open Telemetry JSON</button>
-    </div>
+    </section>
 
-    <div class="row">
-      <p>Server endpoints:</p>
-      <ul>
-        <li><code>/world.json</code> (canonical world config)</li>
-        <li><code>/telemetry</code> (POST results appended to data/human-telemetry.json)</li>
-      </ul>
-    </div>
+    <section>
+      <h2>Telemetry</h2>
+      <button id="open-telemetry">Open Telemetry JSON</button>
+    </section>
 
     <section>
       <h2>Launch AI Demo (Replay)</h2>
-      <label>Recording URL (e.g. /data/recordings/sample-replay.json):
+      <p id="aidemo-hint">AI Demo URL will be constructed from configured port.</p>
+      <label>Recording URL (on AI Demo server): 
         <input id="recUrl" type="text" placeholder="/data/recordings/sample-replay.json" style="width: 24rem;">
       </label>
       <button id="launch-aidemo">Launch AI Demo</button>
     </section>
 
     <script>
+      let aiDemoPort = 3001;
+
+      async function loadServerConfig() {
+        try {
+          const r = await fetch('/server-config.json', { cache: 'no-store' });
+          if (r.ok) {
+            const cfg = await r.json();
+            aiDemoPort = cfg.aiDemoPort || aiDemoPort;
+            document.getElementById('aidemo-hint').textContent =
+              `AI Demo expected at http://localhost:${aiDemoPort}/AIDemo/index.html`;
+          }
+        } catch {}
+      }
+
       document.getElementById('launch').onclick = () => {
         const seed = document.getElementById('seed').value;
         const url = seed ? `index.html?seed=${encodeURIComponent(seed)}` : 'index.html';
@@ -46,10 +58,12 @@
         window.open('data/human-telemetry.json', '_blank', 'noopener');
       };
       document.getElementById('launch-aidemo').onclick = () => {
-        const url = document.getElementById('recUrl').value || '/data/recordings/sample-replay.json';
-        const aidemo = `AIDemo/index.html?rec=${encodeURIComponent(url)}`;
-        window.open(aidemo, '_blank', 'noopener');
+        const rec = document.getElementById('recUrl').value || '/data/recordings/sample-replay.json';
+        const url = `http://localhost:${aiDemoPort}/AIDemo/index.html?rec=${encodeURIComponent(rec)}`;
+        window.open(url, '_blank', 'noopener');
       };
+
+      loadServerConfig();
     </script>
   </body>
 </html>
