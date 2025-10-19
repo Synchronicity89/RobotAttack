@@ -231,6 +231,14 @@ for (let i=0; i<12; i++) {
     let robot = new Robot(robots.length);
     robots.push(robot);
 }
+// Expose for tests (jsdom doesn't bind top-level let to window)
+if (typeof window !== "undefined") {
+    window.yourRobot = yourRobot;
+    window.robots = robots;
+    // Optional: dims if needed by tests
+    window.mcw = mcw;
+    window.mch = mch;
+}
 // Initial shot at frame 0 toward canonical crosshairStart
 {
     const cs = (world && world.crosshairStart) ? world.crosshairStart : { x: 200, y: 200 };
@@ -447,3 +455,7 @@ function mcanMousemove(event){
 }
 mcan.removeEventListener("mousemove", mcanMousemove);
 mcan.addEventListener("mousemove", mcanMousemove);
+// Expose handler for tests that call it directly
+if (typeof window !== "undefined") {
+    window.mcanMousemove = mcanMousemove;
+}
