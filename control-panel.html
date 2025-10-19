@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>RobotAttack Control Panel</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 2rem; }
+      label { display: block; margin: 0.5rem 0; }
+      button { margin-right: 0.75rem; }
+      .row { margin: 1rem 0; }
+      code { background: #f3f3f3; padding: 0.2rem 0.4rem; border-radius: 3px; }
+    </style>
+  </head>
+  <body>
+    <h1>RobotAttack Control Panel</h1>
+
+    <div class="row">
+      <label>Seed (optional): <input id="seed" type="number" placeholder="fresh per run"></label>
+      <button id="launch">Launch Human Game</button>
+      <button id="open-telemetry">Open Telemetry JSON</button>
+    </div>
+
+    <div class="row">
+      <p>Server endpoints:</p>
+      <ul>
+        <li><code>/world.json</code> (canonical world config)</li>
+        <li><code>/telemetry</code> (POST results appended to data/human-telemetry.json)</li>
+      </ul>
+    </div>
+
+    <script>
+      document.getElementById('launch').onclick = () => {
+        const seed = document.getElementById('seed').value;
+        const url = seed ? `index.html?seed=${encodeURIComponent(seed)}` : 'index.html';
+        window.open(url, '_blank', 'noopener');
+      };
+      document.getElementById('open-telemetry').onclick = () => {
+        window.open('data/human-telemetry.json', '_blank', 'noopener');
+      };
+    </script>
+  </body>
+</html>

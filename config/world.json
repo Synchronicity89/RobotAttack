@@ -1,0 +1,6 @@
+{
+  "impl": "human",
+  "clampPlayer": true,
+  "enemyBoundaryMode": "original",
+  "crosshairStart": { "x": 200, "y": 200 }
+}

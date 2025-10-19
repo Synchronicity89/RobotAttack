@@ -31,6 +31,23 @@ This repository is inspired by DeepMind's approach to Atari games, where AI agen
   - Deliver the Human web server and Control Panel page to launch the game, start/stop recording, and manage replays/parity checks (TBD).
   - Adopt world.json and human-telemetry.json as specified; write canonical telemetry on session end.
 
+  - Phase 1 status (this commit)
+    - Completed:
+      - Human web server and Control Panel available and working
+      - Crosshair cursor and initial crosshairStart = (200,200)
+      - Human game loads and runs; Loss signage renders on defeat
+      - Integration tests (jsdom) for loop start, input response, and shooting
+    - Remaining to complete Phase 1:
+      - Single fixed-timestep loop (physics -> render) replacing dual rAF loops
+      - Deterministic PRNG + seed handling (query param and/or world.json) for parity and replay
+      - Player clamp to screen (explicit) and consistent ledge snap (documented already; verify in code)
+      - Enemy boundary behavior honoring enemyBoundaryMode from world.json (original/bounce/splat)
+      - Safe collection updates everywhere (avoid in-loop splicing for lasers/robots consistently)
+      - DPI/layout safe mouse mapping in game code (currently documented; verify code path aligns)
+      - Win signage and draw handling (Loss done; add Win + draw = true when applicable)
+      - Telemetry write on game end (outcome/gameDrawn/frames/durationMs) to /telemetry endpoint
+      - Optional: CCD for lasers (player and/or enemy) per “Proposed Fixes,” if kept in Phase 1 scope
+
 - Phase 2: Add AIDemo/ with its web server, telemetry, and replay capability
   - Build AIDemo server and UI; load recordings from the Control Panel and replay deterministically with AI disabled.
   - Ensure AIDemo consumes the canonical world.json and writes aidemo-telemetry.json.
@@ -380,3 +397,13 @@ Pull requests and issues are welcome. Please see the development plan above for 
 - Control Panel (human server):
   - Buttons for “Start Recording,” “Stop Recording,” “Replay in AI Demo,” with file selector
   - Optional “Parity Check” runs both human and sim with the same seed and input timeline and compares snapshots (TBD)
+
+## Phase 1 next steps (recommended order)
+1. Implement seed ingress (query param ?seed=..., or read world.json) and PRNG wiring.
+2. Switch to a single fixed-timestep loop (physics -> render); keep the game speed stable.
+3. Add explicit player clamp and ledge snap (verify behavior matches README).
+4. Honor enemyBoundaryMode from world.json (original/bounce/splat) with a default of original.
+5. Replace in-loop splicing with safe removals (robots/lasers) consistently.
+6. Add win signage and draw handling; post telemetry to /telemetry on end-of-game.
+7. Verify DPI-safe mouse mapping in code (use getBoundingClientRect + canvas scale).
+8. Optional: add CCD for player/enemy lasers if included in Phase 1 scope; otherwise move to Phase 2.

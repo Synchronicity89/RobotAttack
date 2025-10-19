@@ -1,0 +1,19 @@
+{
+  "name": "RobotAttack",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Human game server and control panel for RobotAttack.",
+  "scripts": {
+    "start": "node server/human-server.js",
+    "test": "jest --runInBand",
+    "test:integration": "jest tests/integration --runInBand"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "jsdom": "^24.0.0",
+    "jest-environment-jsdom": "^29.7.0"
+  }
+}
