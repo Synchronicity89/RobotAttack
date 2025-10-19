@@ -25,13 +25,19 @@
       <button id="open-telemetry">Open Telemetry JSON</button>
     </section>
 
-    <section>
+    <section class="row">
       <h2>Launch AI Demo (Replay)</h2>
-      <p id="aidemo-hint">AI Demo URL will be constructed from configured port.</p>
-      <label>Recording URL (on AI Demo server): 
-        <input id="recUrl" type="text" placeholder="/data/recordings/sample-replay.json" style="width: 24rem;">
+      <p id="aidemo-hint">AI Demo expected at http://localhost:3001/AIDemo/index.html</p>
+      <div>
+        <button id="open-aidemo-home">Open AI Demo Home</button>
+        <button id="refresh-recs">Refresh Recordings</button>
+      </div>
+      <label>Recording URL (on AI Demo server):
+        <input id="recUrl" type="text" placeholder="/data/recordings/sample-replay.json" style="width: 28rem;" list="recList">
+        <datalist id="recList"></datalist>
       </label>
       <button id="launch-aidemo">Launch AI Demo</button>
+      <div id="recStatus" style="font:12px/1.4 sans-serif;color:#555;margin-top:6px;"></div>
     </section>
 
     <script>
@@ -49,6 +55,26 @@
         } catch {}
       }
 
+      async function populateRecordings() {
+        const status = document.getElementById('recStatus');
+        status.textContent = 'Loading recordings...';
+        try {
+          const r = await fetch(`http://localhost:${aiDemoPort}/recordings`, { cache: 'no-store' });
+          if (!r.ok) { status.textContent = 'Failed to load recordings.'; return; }
+          const data = await r.json();
+          const list = document.getElementById('recList');
+          list.innerHTML = '';
+          (data.files || []).forEach(f => {
+            const opt = document.createElement('option');
+            opt.value = `/data/recordings/${f}`;
+            list.appendChild(opt);
+          });
+          status.textContent = `${(data.files || []).length} recording(s) found on AI Demo server.`;
+        } catch (e) {
+          status.textContent = 'Failed to load recordings.';
+        }
+      }
+
       document.getElementById('launch').onclick = () => {
         const seed = document.getElementById('seed').value;
         const url = seed ? `index.html?seed=${encodeURIComponent(seed)}` : 'index.html';
@@ -62,8 +88,14 @@
         const url = `http://localhost:${aiDemoPort}/AIDemo/index.html?rec=${encodeURIComponent(rec)}`;
         window.open(url, '_blank', 'noopener');
       };
+      document.getElementById('open-aidemo-home').onclick = () => {
+        const url = `http://localhost:${aiDemoPort}/AIDemo/index.html`;
+        window.open(url, '_blank', 'noopener');
+      };
+      document.getElementById('refresh-recs').onclick = () => populateRecordings();
 
       loadServerConfig();
+      populateRecordings();
     </script>
   </body>
 </html>

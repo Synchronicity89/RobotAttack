@@ -1,6 +1,7 @@
 (function () {
   const canvas = document.getElementById('aidemo');
   const ctx = canvas.getContext('2d');
+  const bannerEl = document.getElementById('banner');
 
   const bc = [102/255, 77/255, 51/255]; // background color
   let world = {
@@ -9,6 +10,10 @@
     clampPlayer: true,
     crosshairStart: { x: 200, y: 200 }
   };
+
+  function setBanner(text) {
+    if (bannerEl) bannerEl.textContent = text;
+  }
 
   // Fetch world.json (optional) and the recording (?rec=...)
   async function loadConfig() {
@@ -159,8 +164,16 @@
   async function boot() {
     await loadConfig();
     initFromWorld();
+
+    const sp = new URLSearchParams(window.location.search);
+    const recUrl = sp.get('rec');
+    if (recUrl) {
+      setBanner(`AI Demo Replay: ${recUrl}`);
+    } else {
+      setBanner('AI Demo: No recording provided (?rec=/data/recordings/your-file.json)');
+    }
+
     recording = await loadRecording();
-    // If recording defines crosshairStart or seed/world dims, we already used world for dims and start not required here
     requestAnimationFrame(loop);
   }
 
