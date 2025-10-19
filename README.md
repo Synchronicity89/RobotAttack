@@ -20,10 +20,17 @@ This repository is inspired by DeepMind's approach to Atari games, where AI agen
 - Optional for training: NVIDIA GPU + CUDA/cuDNN (TBD exact versions)
 
 ## Quick Start
-- Open the Control Panel (Human server) — TBD exact command/URL.
-  - From the Control Panel, launch the Human Game (index.html) using the canonical world configuration, start/stop recording, and replay recordings in the AI Demo (AI disabled for replay).
-- Seeds: When supported, pass a seed via query param (?seed=1234) or Control Panel input (TBD).
-- Tests and other servers are TBD until Phase 2–3 land.
+- Install and start both servers:
+  - npm install
+  - npm start
+- Human Control Panel:
+  - http://localhost:3000/ (Human server)
+  - From the Control Panel, launch the Human Game (index.html), and open AI Demo replays (served from the AI Demo server).
+- AI Demo (direct URL, optional):
+  - http://localhost:3001/AIDemo/index.html
+- Seeds: When supported, pass a seed via query param (?seed=1234) or Control Panel input.
+- Run tests:
+  - npm run test:integration
 
 ## Project Roadmap (high-level)
 - Phase 1: Finish Human game implementation + Human web server + Control Panel
@@ -210,38 +217,40 @@ The following changes will be applied to the human implementation (canonical) to
    - Provide two simple Node web servers: one for the human game (`index.html`), one for the AI Demo. Each server records measured client rendering info (e.g., canvas/world dimensions) into a JSON file for verification.
    - Canonical source of truth: The human game server’s recorded dimensions are canonical. The AI Demo should accept expected dimensions as input and fail fast on mismatch, while also writing its measured dimensions for comparison.
    - The simulation consumes the same world dimensions (not a DOM canvas) and should validate against the canonical dimensions.
+   - Server isolation
+     - Each implementation serves only its own pages and assets:
+       - Human server: serves the Human game (index.html, code.js, control-panel.html) and its endpoints (/world.json, /telemetry).
+       - AI Demo server: serves the AI Demo (AIDemo/index.html, AIDemo/aidemo.js) and its endpoints (/world.json, /recordings).
+     - No server may serve the other implementation’s HTML/JS directly.
+   - Ports and coordination
+     - Defaults:
+       - Human server (HUMAN_PORT): 3000
+       - AI Demo server (AIDEMO_PORT): 3001
+     - The Control Panel builds the AI Demo URL using AIDEMO_PORT (e.g., http://localhost:3001/AIDemo/index.html). The Human server is configured with this port so the Control Panel can construct the link.
+   - Single command orchestration
+     - npm start launches both servers and keeps them running together. Stopping the npm start process stops both servers.
+     - Optional controls (TBD): special keypress handling to restart both servers without exiting (e.g., press r), and clean shutdown (Ctrl-C).
+   - World/telemetry
+     - Each server reads/writes only its own world/telemetry JSON as defined in this README. The Control Panel only links to AI Demo; it does not proxy or host AI Demo content.
 
-7. No Sharing of Code Between the Three Implementations
+## No Sharing of Code Between the Three Implementations
    - Each implementation maintains its own JavaScript files in its directory (Root, `Sim/`, `AIDemo/`). Do not import/export runtime or game-logic modules across implementations.
    - Code duplication is acceptable: identical-looking code and variable names may appear in multiple implementations if they serve the same purpose.
    - Changes in one implementation must not affect the others; tests enforce behavioral parity, not code reuse.
    - When editing JavaScript, be explicit about which implementation the change belongs to and keep files scoped to that implementation’s directory.
    - Sharing non-executable artifacts is allowed (e.g., test specs/fixtures, JSON schemas/configuration, build/test tooling).
 
-8. Testing
-   - Use Jest. For the human implementation, use jsdom shims as needed; for the simulation, run purely in Node.
-   - Ensure essential game logic parity across all three implementations. Account for differences in input sources: human (keyboard/mouse), simulation and AI Demo (programmatic).
-   - Determinism: Use seeded RNG so that, under identical seeds and starting conditions, the human and AI Demo produce identical results at the same step rate, and the simulation produces identical sequences when advanced equivalently (even if it runs faster overall).
-   - Include tests that validate identical results across implementations given the same seed and initial conditions.
-
-9. Reward Shaping (high-level)
-   - During training, accumulate a negative time penalty per step. At the end of an episode, scale this penalty by the fraction of remaining non-player robots to reduce or eliminate penalties when the player destroys all enemies.
-
-10. Requirements or Assumptions
-   - The AI Demo is intended to run on the same screen as the human game, so captured dimensions are applicable. Running elsewhere is possible with additional work.
-
 ## Getting Started
-1. Open the Control Panel (Human server) — TBD exact command/URL.
-   - From the Control Panel you can:
-     - Launch the Human Game (index.html) using the canonical world configuration.
-     - Start/stop recording a human play session.
-     - Launch AI Demo replays of a selected recording (AI disabled for replay).
-2. Play the Human Game
-   - Use WASD and mouse; F to brake. Firing occurs on mousemove. Win/Loss signage appears at end; simultaneous death + all enemies destroyed is treated as Win with gameDrawn = true.
-3. Record and Replay (optional)
-   - Start recording in the Control Panel, play a session, stop recording, then replay it in the AI Demo to verify determinism and parity across implementations.
-4. Planned components
-   - Commands/servers for `Sim/`, `NNet/`, and `AIDemo/` will be added in future commits along with documentation in this section.
+1. npm install
+2. npm start
+   - Human Control Panel: http://localhost:3000/
+   - AI Demo (direct): http://localhost:3001/AIDemo/index.html
+3. From the Control Panel you can:
+   - Launch the Human Game using the canonical world configuration.
+   - Start/stop recording a human play session (TBD).
+   - Launch AI Demo replays of a selected recording via the AI Demo server.
+4. Tests
+   - npm run test:integration
 
 ## Contributing
 Pull requests and issues are welcome. Please see the development plan above for guidance on where to contribute.
@@ -391,9 +400,9 @@ Pull requests and issues are welcome. Please see the development plan above for 
 - Replay:
   - AI Demo loads a recording, disables AI control, replays inputs deterministically using the same world and seed
   - Used to demonstrate parity and reassure manual testers
-- Control Panel (human server):
-  - Buttons for “Start Recording,” “Stop Recording,” “Replay in AI Demo,” with file selector
-  - Optional “Parity Check” runs both human and sim with the same seed and input timeline and compares snapshots (TBD)
+  - Control Panel (human server):
+    - Buttons for “Start Recording,” “Stop Recording,” “Replay in AI Demo,” with file selector
+    - Optional “Parity Check” runs both human and sim with the same seed and input timeline and compares snapshots (TBD)
 
 ## Phase 1 next steps (recommended order)
 1. Implement seed ingress (query param ?seed=..., or read world.json) and PRNG wiring.
