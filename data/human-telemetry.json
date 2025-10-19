@@ -418,5 +418,35 @@
     "measuredHeight": 791,
     "seed": "444",
     "timestamp": "2025-10-19T18:08:36.887Z"
+  },
+  {
+    "impl": "human",
+    "outcome": "loss",
+    "gameDrawn": false,
+    "frames": 1163,
+    "measuredWidth": 1536,
+    "measuredHeight": 791,
+    "seed": "444",
+    "timestamp": "2025-10-19T18:21:30.382Z"
+  },
+  {
+    "impl": "human",
+    "outcome": "loss",
+    "gameDrawn": false,
+    "frames": 822,
+    "measuredWidth": 1536,
+    "measuredHeight": 791,
+    "seed": "444",
+    "timestamp": "2025-10-19T18:30:54.871Z"
+  },
+  {
+    "impl": "human",
+    "outcome": "win",
+    "gameDrawn": false,
+    "frames": 1870,
+    "measuredWidth": 1536,
+    "measuredHeight": 791,
+    "seed": "444",
+    "timestamp": "2025-10-19T18:36:03.623Z"
   }
 ]

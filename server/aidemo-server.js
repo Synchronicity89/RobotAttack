@@ -17,6 +17,15 @@ if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
 
 app.use(express.json());
 
+// CORS for Control Panel (port 3000) -> AI Demo (port 3001)
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', 'http://localhost:3000');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
+
 // Simple append logger with naive rotation at ~1MB
 function appendLog(file, line) {
   try {

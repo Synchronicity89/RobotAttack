@@ -133,15 +133,48 @@
         state.player.x += state.player.vx;
         state.player.y += state.player.vy;
 
-        // Gravity-ish and floor clamp
-        state.player.vy += state.velChange / 8;
+        // Sticky ledges and ground snap (match Human logic shape)
+        let falling = true;
+        for (const ledge of ledgeOrder) {
+            if (state.player.y + state.yrm / 2 > ledge.y * mch - state.player.vy - 1) {
+                if (state.player.y + state.yrm / 2 < ledge.y * mch + state.player.vy + 1) {
+                    if (state.player.x > (ledge.x - ledge.w / 2) * mcw - state.yrm / 2) {
+                        if (state.player.x < (ledge.x + ledge.w / 2) * mcw + state.yrm / 2) {
+                            falling = false;
+                            state.player.atBottom = false;
+                            state.player.y = ledge.y * mch - state.yrm / 2;
+                            state.player.vy = 0;
+                        }
+                    }
+                }
+            }
+        }
+        // Floor snap
+        if (state.player.y + state.yrm / 2 > mch - state.player.vy - 1) {
+            if (state.player.y + state.yrm / 2 < mch + state.player.vy + 1) {
+                falling = false;
+                state.player.atBottom = true;
+                state.player.y = mch - state.yrm / 2;
+                state.player.vy = 0;
+            }
+        }
+
+        // Gravity/friction depending on falling
+        if (falling) {
+            state.player.vy += state.velChange / 8;
+        } else {
+            // friction already applied above when no A/D held; ensure brake behavior stays simple in demo
+            if (!(held('a') || held('d'))) state.player.vx *= 0.95;
+        }
+
+        // Clamp player inside arena
         if (world.clampPlayer !== false) {
             const half = state.yrm / 2;
             state.player.x = Math.max(half, Math.min(mcw - half, state.player.x));
             state.player.y = Math.max(half, Math.min(mch - half, state.player.y));
         }
 
-        // Advance lasers and cull
+        // Advance/cull lasers
         for (let i = state.lasers.length - 1; i >= 0; i--) {
             const L = state.lasers[i];
             L.x += Math.cos(L.angle) * 10;

@@ -96,8 +96,11 @@ app.post('/recordings/save', (req, res) => {
     const outPath = path.join(recDir, fname);
 
     fs.writeFileSync(outPath, JSON.stringify(body, null, 2));
+    // Write/update marker for the latest file to avoid FS race/sorting issues
+    try { fs.writeFileSync(path.join(recDir, '.latest'), fname); } catch {}
     appendLog('human-server.log', `RECORDING_SAVED ${outPath}`);
     console.log(`[human-server] Saved recording to ${outPath}`);
+    // Return a path suitable for AI Demo server to serve
     res.json({ ok: true, runId, path: `/data/recordings/${fname}` });
   } catch (e) {
     appendLog('human-server.log', `RECORDING_SAVE_ERROR ${e && e.message}`);
@@ -120,20 +123,36 @@ app.get('/recordings/latest', (_req, res) => {
   try {
     const recDir = path.join(dataDir, 'recordings');
     if (!fs.existsSync(recDir)) return res.json({ path: null });
-    const files = fs.readdirSync(recDir).filter(f => f.endsWith('.json'));
+
+    // 1) Prefer explicit marker if present and valid
+    const markerPath = path.join(recDir, '.latest');
+    if (fs.existsSync(markerPath)) {
+      const fname = (fs.readFileSync(markerPath, 'utf8') || '').trim();
+      const fp = path.join(recDir, fname);
+      if (fname.endsWith('.json') && fs.existsSync(fp)) {
+        return res.json({ path: `/data/recordings/${fname}`, file: fname, via: 'marker' });
+      }
+    }
+
+    // 2) Fallback to newest by mtime, ignoring sample-replay.json
+    const files = fs.readdirSync(recDir)
+      .filter(f => f.endsWith('.json') && f !== 'sample-replay.json');
     if (files.length === 0) return res.json({ path: null });
-    // Pick newest by mtime
+
     let newest = null;
     let newestTime = -1;
     for (const f of files) {
       const fp = path.join(recDir, f);
-      const st = fs.statSync(fp);
-      if (st.mtimeMs > newestTime) { newestTime = st.mtimeMs; newest = f; }
+      let st;
+      try { st = fs.statSync(fp); } catch { continue; }
+      if (st && st.mtimeMs > newestTime) {
+        newestTime = st.mtimeMs;
+        newest = f;
+      }
     }
     if (!newest) return res.json({ path: null });
-    // AI Demo serves from /data/recordings
-    res.json({ path: `/data/recordings/${newest}`, file: newest, mtimeMs: newestTime });
-  } catch (e) {
+    res.json({ path: `/data/recordings/${newest}`, file: newest, mtimeMs: newestTime, via: 'mtime' });
+  } catch {
     res.json({ path: null });
   }
 });

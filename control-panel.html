@@ -112,10 +112,15 @@
         window.open(`http://localhost:${aiDemoPort}/data/aidemo-telemetry.json`, '_blank', 'noopener');
       };
       document.getElementById('open-aidemo-home').onclick = () => {
-        const url = `http://localhost:${aiDemoPort}/AIDemo/index.html`;
+        const rec = (document.getElementById('recUrl').value || '').trim();
+        const base = `http://localhost:${aiDemoPort}/AIDemo/index.html`;
+        const url = rec ? `${base}?rec=${encodeURIComponent(rec)}` : base;
         window.open(url, '_blank', 'noopener');
       };
-      document.getElementById('refresh-recs').onclick = () => populateRecordings();
+      document.getElementById('refresh-recs').onclick = async () => {
+        await populateRecordings();
+        await prefillLatestFromHuman(); // also refresh latest + prefill
+      };
       document.getElementById('launch-aidemo').onclick = () => {
         const rec = document.getElementById('recUrl').value || '/data/recordings/sample-replay.json';
         const url = `http://localhost:${aiDemoPort}/AIDemo/index.html?rec=${encodeURIComponent(rec)}`;
