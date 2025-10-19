@@ -1,0 +1,14 @@
+{
+  "world": { "width": 0, "height": 0, "crosshairStart": { "x": 200, "y": 200 } },
+  "seed": 1337,
+  "inputs": [
+    { "frame": 0, "type": "mousemove", "payload": { "x": 200, "y": 200 } },
+    { "frame": 5, "type": "keydown", "payload": { "key": "d" } },
+    { "frame": 60, "type": "keyup", "payload": { "key": "d" } },
+    { "frame": 80, "type": "mousemove", "payload": { "x": 400, "y": 300 } }
+  ],
+  "outcome": "win",
+  "gameDrawn": false,
+  "frames": 180,
+  "durationMs": 3000
+}

@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node server/human-server.js",
     "test": "jest --runInBand",
-    "test:integration": "jest tests/integration --runInBand"
+    "test:integration": "jest tests/integration --runInBand",
+    "start:aidemo": "node server/aidemo-server.js"
   },
   "dependencies": {
     "express": "^4.19.2"

@@ -28,6 +28,14 @@
       </ul>
     </div>
 
+    <section>
+      <h2>Launch AI Demo (Replay)</h2>
+      <label>Recording URL (e.g. /data/recordings/sample-replay.json):
+        <input id="recUrl" type="text" placeholder="/data/recordings/sample-replay.json" style="width: 24rem;">
+      </label>
+      <button id="launch-aidemo">Launch AI Demo</button>
+    </section>
+
     <script>
       document.getElementById('launch').onclick = () => {
         const seed = document.getElementById('seed').value;
@@ -36,6 +44,11 @@
       };
       document.getElementById('open-telemetry').onclick = () => {
         window.open('data/human-telemetry.json', '_blank', 'noopener');
+      };
+      document.getElementById('launch-aidemo').onclick = () => {
+        const url = document.getElementById('recUrl').value || '/data/recordings/sample-replay.json';
+        const aidemo = `AIDemo/index.html?rec=${encodeURIComponent(url)}`;
+        window.open(aidemo, '_blank', 'noopener');
       };
     </script>
   </body>

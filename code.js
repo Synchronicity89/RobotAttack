@@ -82,7 +82,7 @@ class Robot{
     constructor(id){
         this.health = 1;
         this.id = id;
-        this.x = Math.random()*mcw;
+        this.x = rand()*mcw; // seed-aware spawn x for determinism
         this.y = mch;
         this.speed = velChange*3;
         this.lasers = [];

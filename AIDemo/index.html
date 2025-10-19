@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>RobotAttack - AI Demo (Replay)</title>
+    <style>
+      html, body { margin: 0; padding: 0; height: 100%; }
+      body { cursor: crosshair; }
+      canvas { display: block; width: 100%; height: 100%; }
+      #banner {
+        position: absolute; top: 8px; left: 8px;
+        background: rgba(0,0,0,0.5); color: #fff; padding: 4px 8px; font: 12px/1.4 sans-serif;
+        border-radius: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="banner">AI Demo Replay</div>
+    <canvas id="aidemo"></canvas>
+    <script src="../humanLib.js"></script>
+    <script src="./aidemo.js"></script>
+  </body>
+</html>

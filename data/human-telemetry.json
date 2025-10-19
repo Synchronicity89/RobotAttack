@@ -188,5 +188,75 @@
     "measuredHeight": 791,
     "seed": null,
     "timestamp": "2025-10-19T02:18:12.263Z"
+  },
+  {
+    "impl": "human",
+    "outcome": "win",
+    "gameDrawn": false,
+    "frames": 1683,
+    "measuredWidth": 1536,
+    "measuredHeight": 791,
+    "seed": null,
+    "timestamp": "2025-10-19T02:25:14.586Z"
+  },
+  {
+    "impl": "human",
+    "outcome": "loss",
+    "gameDrawn": false,
+    "frames": 1001,
+    "measuredWidth": 1536,
+    "measuredHeight": 791,
+    "seed": "666",
+    "timestamp": "2025-10-19T02:44:44.795Z"
+  },
+  {
+    "impl": "human",
+    "outcome": "loss",
+    "gameDrawn": false,
+    "frames": 884,
+    "measuredWidth": 1536,
+    "measuredHeight": 791,
+    "seed": "666",
+    "timestamp": "2025-10-19T02:45:02.557Z"
+  },
+  {
+    "impl": "human",
+    "outcome": "win",
+    "gameDrawn": false,
+    "frames": 1489,
+    "measuredWidth": 1536,
+    "measuredHeight": 791,
+    "seed": "666",
+    "timestamp": "2025-10-19T02:45:29.940Z"
+  },
+  {
+    "impl": "human",
+    "outcome": "loss",
+    "gameDrawn": false,
+    "frames": 1324,
+    "measuredWidth": 1536,
+    "measuredHeight": 791,
+    "seed": "444",
+    "timestamp": "2025-10-19T02:58:56.417Z"
+  },
+  {
+    "impl": "human",
+    "outcome": "loss",
+    "gameDrawn": false,
+    "frames": 1490,
+    "measuredWidth": 1536,
+    "measuredHeight": 791,
+    "seed": "444",
+    "timestamp": "2025-10-19T02:59:25.465Z"
+  },
+  {
+    "impl": "human",
+    "outcome": "win",
+    "gameDrawn": false,
+    "frames": 1865,
+    "measuredWidth": 1536,
+    "measuredHeight": 791,
+    "seed": "444",
+    "timestamp": "2025-10-19T02:59:59.573Z"
   }
 ]

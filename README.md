@@ -31,22 +31,19 @@ This repository is inspired by DeepMind's approach to Atari games, where AI agen
   - Deliver the Human web server and Control Panel page to launch the game, start/stop recording, and manage replays/parity checks (TBD).
   - Adopt world.json and human-telemetry.json as specified; write canonical telemetry on session end.
 
-  - Phase 1 status (this commit)
-    - Completed:
-      - Human web server and Control Panel available and working
-      - Crosshair cursor and initial crosshairStart = (200,200)
-      - Human game loads and runs; Loss signage renders on defeat
-      - Integration tests (jsdom) for loop start, input response, and shooting
-    - Remaining to complete Phase 1:
-      - Single fixed-timestep loop (physics -> render) replacing dual rAF loops
-      - Deterministic PRNG + seed handling (query param and/or world.json) for parity and replay
-      - Player clamp to screen (explicit) and consistent ledge snap (documented already; verify in code)
-      - Enemy boundary behavior honoring enemyBoundaryMode from world.json (original/bounce/splat)
-      - Safe collection updates everywhere (avoid in-loop splicing for lasers/robots consistently)
-      - DPI/layout safe mouse mapping in game code (currently documented; verify code path aligns)
-      - Win signage and draw handling (Loss done; add Win + draw = true when applicable)
-      - Telemetry write on game end (outcome/gameDrawn/frames/durationMs) to /telemetry endpoint
-      - Optional: CCD for lasers (player and/or enemy) per “Proposed Fixes,” if kept in Phase 1 scope
+- Phase 1 status (this commit)
+  - Completed:
+    - Human web server and Control Panel implemented
+    - Single fixed-timestep loop (physics -> render)
+    - Seeded PRNG (query param ?seed=...) wired into all randomness (including ledges, robot spawn x, tarD, shooting schedules)
+    - Crosshair and initial shot toward (200,200)
+    - DPI-safe mouse mapping, input conflict policy, clamp player, ledge snap
+    - Win/Loss signage and draw handling; telemetry POST on game end
+    - enemyBoundaryMode implemented; default kept as "original" for better gameplay (bounce/splat available but not default)
+    - Safe collection updates for lasers/robots; jsdom integration tests passing
+  - Deferred to later phase:
+    - Optional CCD for enemy lasers (player lasers can remain legacy until parity tests require CCD)
+    - Recording/Replay UI and parity checks in Control Panel
 
 - Phase 2: Add AIDemo/ with its web server, telemetry, and replay capability
   - Build AIDemo server and UI; load recordings from the Control Panel and replay deterministically with AI disabled.
