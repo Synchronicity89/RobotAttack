@@ -119,33 +119,57 @@ class Robot{
     updatePhysics(){
         let angle = Math.atan2(this.y-yourRobot.y, this.x-yourRobot.x);
         let distance = getDiagonal(this.x-yourRobot.x, this.y-yourRobot.y);
-        let newA = angle+this.speed/distance;
+        let newA = angle+this.speed/Math.max(distance, 1e-6);
         let newD = distance+(this.tarD-distance)/(100/velChange);
-        this.x = yourRobot.x+Math.cos(newA)*newD;
-        this.y = yourRobot.y+Math.sin(newA)*newD;
 
+        // compute proposed new position
+        let nx = yourRobot.x+Math.cos(newA)*newD;
+        let ny = yourRobot.y+Math.sin(newA)*newD;
+
+        // Apply enemy boundary behavior
+        const half = yrm/2;
+        const mode = (world && world.enemyBoundaryMode) ? String(world.enemyBoundaryMode) : 'original';
+        if (mode === 'splat') {
+            // clamp inside arena
+            nx = Math.max(half, Math.min(mcw - half, nx));
+            ny = Math.max(half, Math.min(mch - half, ny));
+        } else if (mode === 'bounce') {
+            // reflect direction at walls and recompute position
+            let a = newA;
+            if (nx < half || nx > mcw - half) {
+                a = Math.PI - a; // horizontal reflection
+            }
+            nx = yourRobot.x + Math.cos(a) * newD;
+            if (ny < half || ny > mch - half) {
+                a = -a; // vertical reflection
+            }
+            newA = a;
+            nx = yourRobot.x + Math.cos(newA) * newD;
+            ny = yourRobot.y + Math.sin(newA) * newD;
+            // keep inside after reflection
+            nx = Math.max(half, Math.min(mcw - half, nx));
+            ny = Math.max(half, Math.min(mch - half, ny));
+        }
+        // assign
+        this.x = nx;
+        this.y = ny;
+
+        // Shooting schedule
         this.shootTimes.forEach((st)=>{
             if (timer%st.d == st.v) {
                 this.shoot();
             }
         });
 
-        this.lasers.forEach((laser)=>{
+        // Safe enemy laser updates: iterate backwards and splice
+        for (let i = this.lasers.length - 1; i >= 0; i--) {
+            const laser = this.lasers[i];
             laser.x += Math.cos(laser.angle)*this.speed;
             laser.y += Math.sin(laser.angle)*this.speed;
-            if (laser.x > mcw) {
-                laser.remove();
+            if (laser.x > mcw || laser.y > mch || laser.x < 0 || laser.y < 0) {
+                this.lasers.splice(i, 1);
             }
-            if (laser.y > mch) {
-                laser.remove();
-            }
-            if (laser.x < 0) {
-                laser.remove();
-            }
-            if (laser.y < 0) {
-                laser.remove();
-            }
-        });
+        }
     }
 }
 
