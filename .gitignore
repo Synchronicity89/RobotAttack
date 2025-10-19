@@ -17,3 +17,6 @@ Thumbs.db
 
 # Environment files
 .env
+
+# Reverted folder
+reverted/
