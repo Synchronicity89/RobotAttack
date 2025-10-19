@@ -39,6 +39,23 @@ try {
   }
 } catch {}
 
+// Recording (gated via ?record=1)
+const __sp = new URLSearchParams(window.location.search);
+const recordEnabled = ['1','true'].includes((__sp.get('record') || '').toLowerCase());
+const runId = (typeof HumanLib !== 'undefined' && typeof HumanLib.uuidv4 === 'function')
+  ? HumanLib.uuidv4() : `run-${Date.now()}`;
+const startMs = performance.now();
+const recording = {
+  runId,
+  world: { width: 0, height: 0, crosshairStart: (typeof world !== 'undefined' && world && world.crosshairStart) ? world.crosshairStart : { x: 200, y: 200 } },
+  seed: __sp.has('seed') ? Number(__sp.get('seed')) : null,
+  inputs: [],
+  outcome: null,
+  gameDrawn: false,
+  frames: 0,
+  durationMs: 0
+};
+
 function randomBetween(min, max, precision){
     // Use seeded RNG
     return Math.floor((rand()*(max-min)+min)/precision)*precision;
@@ -269,6 +286,10 @@ if (typeof window !== "undefined") {
     const initLaser = new Laser(yourRobot.idCounter, yourRobot, true, cs.x, cs.y);
     yourRobot.lasers.push(initLaser);
     yourRobot.idCounter++;
+    if (recordEnabled) {
+        // Record the initial aim/shot event at frame 0
+        recording.inputs.push({ frame: 0, type: 'mousemove', payload: { x: cs.x, y: cs.y } });
+    }
 }
 
 let defaultRobot = new Robot(-1);
@@ -445,6 +466,21 @@ function stepPhysics(){
                 })
             }).catch(()=>{});
         } catch {}
+        // Save recording if enabled
+        if (recordEnabled) {
+            recording.outcome = outcome;
+            recording.gameDrawn = gameDrawn;
+            recording.frames = timer;
+            recording.durationMs = Math.round(performance.now() - startMs);
+            try {
+                fetch('/recordings/save', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(recording)
+                }).then(r => r.ok ? r.json() : null)
+                  .catch(()=>{});
+            } catch {}
+        }
     }
 }
 
@@ -454,12 +490,18 @@ requestAnimationFrame(gameLoop);
 // Update key handlers to use Set
 function keyDownEvent(event){
     keysDown.add((event.key || '').toLowerCase());
+    if (recordEnabled) {
+        recording.inputs.push({ frame: timer, type: 'keydown', payload: { key: (event.key || '').toLowerCase() } });
+    }
 }
 document.removeEventListener("keydown", keyDownEvent);
 document.addEventListener("keydown", keyDownEvent);
 
 function keyUpEvent(event){
     keysDown.delete((event.key || '').toLowerCase());
+    if (recordEnabled) {
+        recording.inputs.push({ frame: timer, type: 'keyup', payload: { key: (event.key || '').toLowerCase() } });
+    }
 }
 document.removeEventListener("keyup", keyUpEvent);
 document.addEventListener("keyup", keyUpEvent);
@@ -475,6 +517,9 @@ function mcanMousemove(event){
         yourRobot.lasers.push(laser);
         yourRobot.idCounter ++;
         yrCanShoot = false;
+        if (recordEnabled) {
+            recording.inputs.push({ frame: timer, type: 'mousemove', payload: { x: pt.x, y: pt.y } });
+        }
     }
 }
 mcan.removeEventListener("mousemove", mcanMousemove);
@@ -483,3 +528,24 @@ mcan.addEventListener("mousemove", mcanMousemove);
 if (typeof window !== "undefined") {
     window.mcanMousemove = mcanMousemove;
 }
+
+// Safe client logger (no-ops if fetch is unavailable)
+function clientLog(level, msg, data) {
+  try {
+    if (typeof fetch !== 'function') return;
+    fetch('/client-log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ level, msg, data, ts: new Date().toISOString() })
+    }).catch(() => {});
+  } catch {}
+}
+// Capture errors and unhandled rejections
+window.addEventListener('error', (e) => clientLog('error', e.message, { stack: e.error && e.error.stack }));
+window.addEventListener('unhandledrejection', (e) => clientLog('error', 'unhandledrejection', { reason: String(e.reason) }));
+// Mirror console.error
+const __origConsoleError = console.error.bind(console);
+console.error = function(...args) {
+  clientLog('error', 'console.error', { args });
+  __origConsoleError(...args);
+};

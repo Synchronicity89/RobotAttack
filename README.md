@@ -413,3 +413,29 @@ Pull requests and issues are welcome. Please see the development plan above for 
 6. Add win signage and draw handling; post telemetry to /telemetry on end-of-game.
 7. Verify DPI-safe mouse mapping in code (use getBoundingClientRect + canvas scale).
 8. Optional: add CCD for player/enemy lasers if included in Phase 1 scope; otherwise move to Phase 2.
+
+## Logging (per implementation)
+- Location: ./logs/ (ignored by git)
+  - Human server: logs/human-server.log
+  - Human client (browser): logs/human-client.log (sent via POST /client-log)
+  - AI Demo server: logs/aidemo-server.log
+  - AI Demo client (browser): logs/aidemo-client.log (sent via POST /client-log)
+- Server logging
+  - Appends key events (startup, listen, telemetry received, recording saved/errors).
+  - Simple rotation: if a log exceeds ~1 MB, it is moved to .1.log and a fresh file continues.
+- Client logging
+  - The Human game and AI Demo attach window.onerror and unhandledrejection handlers, and mirror console.error.
+  - Logs are POSTed best-effort to each implementation’s /client-log endpoint and appended to the corresponding client log file.
+  - If fetch is unavailable (tests/offline), logging silently no-ops.
+- Telemetry files (JSON arrays)
+  - Human: ./data/human-telemetry.json
+  - AI Demo: ./data/aidemo-telemetry.json
+- Recordings
+  - Saved by Human server at ./data/recordings/<runId>.json when the Human game runs with ?record=1 and ends (Win/Loss).
+  - AI Demo lists files from /recordings and serves them from /data/recordings.
+
+How to inspect logs
+- Tail Human server log: tail -f logs/human-server.log
+- Tail Human client log: tail -f logs/human-client.log
+- Tail AI Demo server log: tail -f logs/aidemo-server.log
+- Tail AI Demo client log: tail -f logs/aidemo-client.log

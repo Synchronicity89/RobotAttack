@@ -7,8 +7,8 @@
     "start": "node server/dev-runner.js",
     "start:human": "node server/human-server.js",
     "start:aidemo": "node server/aidemo-server.js",
-    "test": "jest --runInBand",
-    "test:integration": "jest tests/integration --runInBand"
+    "test": "sh -c 'mkdir -p logs; ts=$(date +%F_%H-%M-%S); jest --runInBand 2>&1 | tee logs/test-$ts.log | tee logs/test-latest.log > /dev/null'",
+    "test:integration": "sh -c 'mkdir -p logs; ts=$(date +%F_%H-%M-%S); jest tests/integration --runInBand 2>&1 | tee logs/test-integration-$ts.log | tee logs/test-integration-latest.log > /dev/null'"
   },
   "dependencies": {
     "express": "^4.19.2"

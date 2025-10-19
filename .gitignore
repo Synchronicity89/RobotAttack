@@ -13,10 +13,13 @@ __pycache__/
 Thumbs.db
 
 # Logs
-*.log
+logs/
 
 # Environment files
 .env
 
 # Reverted folder
 reverted/
+
+# Data folder
+data/

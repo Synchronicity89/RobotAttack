@@ -14,15 +14,17 @@
   <body>
     <h1>RobotAttack Control Panel</h1>
 
-    <section>
+    <section class="row">
       <h2>Launch Human Game</h2>
       <label>Seed (optional): <input id="seed" type="number" placeholder="fresh per run"></label>
       <button id="launch">Launch Human Game</button>
+      <button id="launch-record">Record New Human Session</button>
     </section>
 
-    <section>
+    <section class="row">
       <h2>Telemetry</h2>
-      <button id="open-telemetry">Open Telemetry JSON</button>
+      <button id="open-telemetry">Open Human Telemetry JSON</button>
+      <button id="open-aidemo-telemetry">Open AI Demo Telemetry JSON</button>
     </section>
 
     <section class="row">
@@ -36,6 +38,7 @@
         <input id="recUrl" type="text" placeholder="/data/recordings/sample-replay.json" style="width: 28rem;" list="recList">
         <datalist id="recList"></datalist>
       </label>
+      <div id="lastRec" style="font:12px/1.4 sans-serif;color:#555;margin-top:6px;"></div>
       <button id="launch-aidemo">Launch AI Demo</button>
       <div id="recStatus" style="font:12px/1.4 sans-serif;color:#555;margin-top:6px;"></div>
     </section>
@@ -75,27 +78,55 @@
         }
       }
 
+      async function prefillLatestFromHuman() {
+        try {
+          const r = await fetch('/recordings/latest', { cache: 'no-store' });
+          if (!r.ok) return;
+          const data = await r.json();
+          if (data && data.path) {
+            const input = document.getElementById('recUrl');
+            input.value = data.path;
+            const lastRec = document.getElementById('lastRec');
+            lastRec.textContent = `Last saved recording: ${data.path}`;
+          }
+        } catch {}
+      }
+
       document.getElementById('launch').onclick = () => {
         const seed = document.getElementById('seed').value;
         const url = seed ? `index.html?seed=${encodeURIComponent(seed)}` : 'index.html';
         window.open(url, '_blank', 'noopener');
       };
+      document.getElementById('launch-record').onclick = () => {
+        const seed = document.getElementById('seed').value;
+        const params = new URLSearchParams();
+        if (seed) params.set('seed', seed);
+        params.set('record', '1');
+        const url = `index.html?${params.toString()}`;
+        window.open(url, '_blank', 'noopener');
+      };
       document.getElementById('open-telemetry').onclick = () => {
         window.open('data/human-telemetry.json', '_blank', 'noopener');
       };
-      document.getElementById('launch-aidemo').onclick = () => {
-        const rec = document.getElementById('recUrl').value || '/data/recordings/sample-replay.json';
-        const url = `http://localhost:${aiDemoPort}/AIDemo/index.html?rec=${encodeURIComponent(rec)}`;
-        window.open(url, '_blank', 'noopener');
+      document.getElementById('open-aidemo-telemetry').onclick = () => {
+        window.open(`http://localhost:${aiDemoPort}/data/aidemo-telemetry.json`, '_blank', 'noopener');
       };
       document.getElementById('open-aidemo-home').onclick = () => {
         const url = `http://localhost:${aiDemoPort}/AIDemo/index.html`;
         window.open(url, '_blank', 'noopener');
       };
       document.getElementById('refresh-recs').onclick = () => populateRecordings();
+      document.getElementById('launch-aidemo').onclick = () => {
+        const rec = document.getElementById('recUrl').value || '/data/recordings/sample-replay.json';
+        const url = `http://localhost:${aiDemoPort}/AIDemo/index.html?rec=${encodeURIComponent(rec)}`;
+        window.open(url, '_blank', 'noopener');
+      };
 
-      loadServerConfig();
-      populateRecordings();
+      (async function init() {
+        await loadServerConfig();
+        await populateRecordings();
+        await prefillLatestFromHuman();
+      })();
     </script>
   </body>
 </html>
