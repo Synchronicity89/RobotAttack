@@ -150,18 +150,26 @@
         }
     }
 
+    // Persistent falling flag (mirrors Human's 'falling' across frames)
+    let demoFalling = true;
+
     function stepPhysics() {
         const mcw = canvas.width, mch = canvas.height;
         const held = (k) => state.keysDown.has(k);
-        // Horizontal
-        if (held('a') && held('d')) state.player.vx = 0;
-        else if (held('a')) state.player.vx = -3 * state.velChange;
-        else if (held('d')) state.player.vx = 3 * state.velChange;
-        else state.player.vx *= 0.95;
 
-        // Vertical jump/drop simplified (no ledges in replay)
-        if (held('w')) state.player.vy = -6 * state.velChange;
-        if (held('s')) state.player.vy = 3 * state.velChange;
+        // Horizontal input (A/D) with conflict cancel; F brakes horizontal
+        if (held('a') && held('d')) {
+            state.player.vx = 0;
+        } else if (held('a')) {
+            state.player.vx = -3 * state.velChange;
+        } else if (held('d')) {
+            state.player.vx = 3 * state.velChange;
+        }
+        if (held('f')) state.player.vx = 0;
+
+        // Vertical input gated by previous-frame falling/atBottom
+        if (!demoFalling && held('w')) state.player.vy = -6 * state.velChange;
+        if (!demoFalling && !state.player.atBottom && held('s')) state.player.vy = 3 * state.velChange;
 
         // Integrate
         state.player.x += state.player.vx;
@@ -193,13 +201,16 @@
             }
         }
 
-        // Gravity/friction depending on falling
+        // Gravity/friction depending on falling; F overrides friction like Human
         if (falling) {
             state.player.vy += state.velChange / 8;
         } else {
-            // friction already applied above when no A/D held; ensure brake behavior stays simple in demo
-            if (!(held('a') || held('d'))) state.player.vx *= 0.95;
+            if (!held('f')) state.player.vx *= 0.95;
+            else state.player.vx = 0;
         }
+
+        // Update persistent falling for next frame's input gating
+        demoFalling = falling;
 
         // Clamp player inside arena
         if (world.clampPlayer !== false) {
@@ -220,7 +231,7 @@
         for (let i = state.robots.length - 1; i >= 0; i--) {
             const rb = state.robots[i];
             rb.update(state.player, state.velChange);
-            if (rb.health < 0) state.robots.splice(i, 1); // optional cleanup
+            if (rb.health < 0) state.robots.splice(i, 1);
         }
 
         state.timer++;
@@ -230,7 +241,6 @@
 
     function drawFrame() {
         const mcw = canvas.width, mch = canvas.height;
-        // Background
         ctx.fillStyle = `rgba(${Math.floor(bc[0] * 255)}, ${Math.floor(bc[1] * 255)}, ${Math.floor(bc[2] * 255)}, 1)`;
         ctx.fillRect(0, 0, mcw, mch);
 
@@ -261,9 +271,25 @@
         ctx.strokeRect(state.player.x - state.yrm / 4, state.player.y - state.yrm / 4, state.yrm / 2, state.yrm / 2);
     }
 
+    // Draw end-of-game signage (Win/Loss)
+    function drawEndOverlay(outcome) {
+        const mcw = canvas.width, mch = canvas.height;
+        const mcm = Math.min(mcw, mch);
+        ctx.save();
+        ctx.font = `bold ${Math.floor(mcm / 8)}px sans-serif`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        const isWin = (String(outcome || '').toLowerCase() === 'win');
+        ctx.fillStyle = isWin ? '#00ff00' : '#ff0000';
+        ctx.fillText(isWin ? 'Win' : 'Loss', mcw / 2, mch / 2);
+        ctx.restore();
+    }
+
     let recording = null;
     let stopFrame = Infinity;
     let finished = false;
+    let endOutcome = null;
+    let endDrawn = false;
 
     function stepReplay() {
         if (!recording) return;
@@ -277,7 +303,12 @@
     function postTelemetryAndStop() {
         if (finished) return;
         finished = true;
-        // Best-effort telemetry; ignore failures in tests/manual
+
+        // Prefer the recording’s outcome; fallback label if missing
+        endOutcome = (recording && recording.outcome) ? String(recording.outcome).toLowerCase() : 'replay';
+        endDrawn = !!(recording && recording.gameDrawn);
+
+        // Best-effort telemetry; include recording outcome/drawn when available
         try {
             fetch('/aidemo-telemetry', {
                 method: 'POST',
@@ -287,15 +318,20 @@
                     frames: state.frame,
                     measuredWidth: canvas.width,
                     measuredHeight: canvas.height,
-                    outcome: 'replay',
-                    gameDrawn: false
+                    outcome: endOutcome,
+                    gameDrawn: endDrawn
                 })
             }).catch(() => { });
         } catch { }
-        // Draw an end banner
-        setBanner((new URLSearchParams(window.location.search)).get('rec')
-            ? 'Replay End'
-            : 'AI Demo Idle');
+
+        // Final draw with end signage
+        drawFrame();
+        if (endOutcome === 'win' || endOutcome === 'loss') {
+            drawEndOverlay(endOutcome);
+            setBanner(endOutcome === 'win' ? 'Win' : 'Loss');
+        } else {
+            setBanner((new URLSearchParams(window.location.search)).get('rec') ? 'Replay End' : 'AI Demo Idle');
+        }
     }
 
     function loop() {
