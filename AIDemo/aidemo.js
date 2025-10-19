@@ -227,12 +227,39 @@
             if (L.x < 0 || L.x > mcw || L.y < 0 || L.y > mch) state.lasers.splice(i, 1);
         }
 
-        // Update robots (orbit around player)
+        // Player lasers vs enemies: apply Human policy (nearest-to-origin robot, AABB ~ yrm)
+        if (state.robots.length > 0) {
+            // find nearest by origin (x^2 + y^2), not nearest to laser
+            let nearestIdx = -1, nearestVal = Infinity;
+            for (let i = 0; i < state.robots.length; i++) {
+                const r = state.robots[i];
+                const d2 = r.x * r.x + r.y * r.y;
+                if (d2 < nearestVal) { nearestVal = d2; nearestIdx = i; }
+            }
+            if (nearestIdx >= 0) {
+                const nr = state.robots[nearestIdx];
+                for (let i = state.lasers.length - 1; i >= 0; i--) {
+                    const L = state.lasers[i];
+                    if (L.x > nr.x - state.yrm && L.x < nr.x + state.yrm &&
+                        L.y > nr.y - state.yrm && L.y < nr.y + state.yrm) {
+                        state.lasers.splice(i, 1);
+                        nr.health -= 0.2;
+                    }
+                }
+            }
+        }
+
+        // Update robots (orbit around player) and decay/remove like Human
         for (let i = state.robots.length - 1; i >= 0; i--) {
             const rb = state.robots[i];
             rb.update(state.player, state.velChange);
+            rb.health -= 1 / 1200;
             if (rb.health < 0) state.robots.splice(i, 1);
         }
+
+        // Environment and regen (mirror Human)
+        if (state.player.y > mch - state.yrm * 1.5) state.player.health -= 1 / 180;
+        if (state.player.health < 1 - 1 / 3600) state.player.health += 1 / 3600;
 
         state.timer++;
         if (state.timer % 10 === 0) state.yrCanShoot = true;
@@ -304,11 +331,13 @@
         if (finished) return;
         finished = true;
 
-        // Prefer the recording’s outcome; fallback label if missing
-        endOutcome = (recording && recording.outcome) ? String(recording.outcome).toLowerCase() : 'replay';
-        endDrawn = !!(recording && recording.gameDrawn);
+        // Compute outcome from current state (prefer real-time over recording)
+        const noEnemies = (state.robots.length === 0);
+        const playerDead = (state.player.health <= 0);
+        const drawn = noEnemies && playerDead;
+        const computedOutcome = noEnemies ? 'win' : (playerDead ? 'loss' : 'replay');
+        const isTerminal = (computedOutcome === 'win' || computedOutcome === 'loss');
 
-        // Best-effort telemetry; include recording outcome/drawn when available
         try {
             fetch('/aidemo-telemetry', {
                 method: 'POST',
@@ -318,17 +347,25 @@
                     frames: state.frame,
                     measuredWidth: canvas.width,
                     measuredHeight: canvas.height,
-                    outcome: endOutcome,
-                    gameDrawn: endDrawn
+                    outcome: computedOutcome,
+                    gameDrawn: drawn
                 })
             }).catch(() => { });
         } catch { }
 
-        // Final draw with end signage
+        // Final draw + signage if terminal
         drawFrame();
-        if (endOutcome === 'win' || endOutcome === 'loss') {
-            drawEndOverlay(endOutcome);
-            setBanner(endOutcome === 'win' ? 'Win' : 'Loss');
+        if (isTerminal) {
+            const mcw = canvas.width, mch = canvas.height;
+            const mcm = Math.min(mcw, mch);
+            ctx.save();
+            ctx.font = `bold ${Math.floor(mcm / 8)}px sans-serif`;
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillStyle = (computedOutcome === 'win') ? '#00ff00' : '#ff0000';
+            ctx.fillText((computedOutcome === 'win') ? 'Win' : 'Loss', mcw / 2, mch / 2);
+            ctx.restore();
+            setBanner(computedOutcome === 'win' ? 'Win' : 'Loss');
         } else {
             setBanner((new URLSearchParams(window.location.search)).get('rec') ? 'Replay End' : 'AI Demo Idle');
         }
@@ -336,14 +373,18 @@
 
     function loop() {
         if (finished) return;
-        // process replay events, then physics and draw
         stepReplay();
         stepPhysics();
         drawFrame();
-        if (state.frame >= stopFrame) {
+
+        // Early stop if real-time outcome reached; else use stopFrame upper bound
+        const noEnemies = (state.robots.length === 0);
+        const playerDead = (state.player.health <= 0);
+        if (noEnemies || playerDead || state.frame >= stopFrame) {
             postTelemetryAndStop();
             return;
         }
+
         requestAnimationFrame(loop);
     }
 
