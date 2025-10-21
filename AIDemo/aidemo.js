@@ -80,6 +80,8 @@
         yrm: 0,
         velChange: 0,
         yrCanShoot: true,
+        crosshair: { x: 200, y: 200 }, // gameplay target
+        crosshairVisual: { x: 200, y: 200 }, // smoothed visual-only crosshair
         keysDown: new Set(),
         player: {
             x: 0, y: 0, vx: 0, vy: 0, atBottom: false, health: 1, idCounter: 0
@@ -99,6 +101,12 @@
         // Start player mid-screen-ish (replay doesn't simulate ledges/robots)
         state.player.x = mcw / 2;
         state.player.y = mch / 2;
+        // Initialize crosshair position from world or fallback
+        const cs = (world && world.crosshairStart) ? world.crosshairStart : { x: 200, y: 200 };
+        state.crosshair.x = Math.max(0, Math.min(mcw, Number(cs.x) || 200));
+        state.crosshair.y = Math.max(0, Math.min(mch, Number(cs.y) || 200));
+        state.crosshairVisual.x = state.crosshair.x;
+        state.crosshairVisual.y = state.crosshair.y;
     }
 
     function applyEvent(ev) {
@@ -109,8 +117,15 @@
         } else if (t === 'keyup') {
             if (p.key) state.keysDown.delete(String(p.key).toLowerCase());
         } else if (t === 'mousemove') {
+            // Update crosshair and, if off cooldown, fire toward it
+            const cx = Number(p.x);
+            const cy = Number(p.y);
+            if (Number.isFinite(cx) && Number.isFinite(cy)) {
+                state.crosshair.x = cx;
+                state.crosshair.y = cy;
+            }
             if (state.yrCanShoot) {
-                const angle = Math.atan2(p.y - state.player.y, p.x - state.player.x);
+                const angle = Math.atan2(state.crosshair.y - state.player.y, state.crosshair.x - state.player.x);
                 state.lasers.push({ x: state.player.x, y: state.player.y, angle, id: state.player.idCounter++ });
                 state.yrCanShoot = false;
             }
@@ -338,6 +353,19 @@
         ctx.fillRect(state.player.x - state.yrm / 2, state.player.y - state.yrm / 2, state.yrm, state.yrm);
         ctx.strokeStyle = 'rgba(0,0,255,1)';
         ctx.strokeRect(state.player.x - state.yrm / 4, state.player.y - state.yrm / 4, state.yrm / 2, state.yrm / 2);
+
+        // Crosshair overlay
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+        ctx.lineWidth = Math.max(1, Math.floor(state.yrm / 16));
+        const cs = 10; // half-size of crosshair arms
+        ctx.beginPath();
+        ctx.moveTo(state.crosshairVisual.x - cs, state.crosshairVisual.y);
+        ctx.lineTo(state.crosshairVisual.x + cs, state.crosshairVisual.y);
+        ctx.moveTo(state.crosshairVisual.x, state.crosshairVisual.y - cs);
+        ctx.lineTo(state.crosshairVisual.x, state.crosshairVisual.y + cs);
+        ctx.stroke();
+        ctx.restore();
     }
 
     // Draw end-of-game signage (Win/Loss)
@@ -359,6 +387,7 @@
     let finished = false;
     let endOutcome = null;
     let endDrawn = false;
+    let aiEnabled = false;
 
     function stepReplay() {
         if (!recording) return;
@@ -416,6 +445,8 @@
     function loop() {
         if (finished) return;
         stepReplay();
+        if (aiEnabled) stepAI();
+        stepCrosshairVisual();
         stepPhysics();
         drawFrame();
 
@@ -428,6 +459,42 @@
         }
 
         requestAnimationFrame(loop);
+    }
+
+    // Minimal AI to move the crosshair and trigger shots when no recording is provided
+    function stepAI() {
+        const mcw = canvas.width, mch = canvas.height;
+        // Target the nearest robot to the player; if none, aim at center
+        let tx = mcw / 2, ty = mch / 2;
+        if (state.robots.length > 0) {
+            let bestIdx = -1, bestD2 = Infinity;
+            for (let i = 0; i < state.robots.length; i++) {
+                const r = state.robots[i];
+                const dx = r.x - state.player.x;
+                const dy = r.y - state.player.y;
+                const d2 = dx * dx + dy * dy;
+                if (d2 < bestD2) { bestD2 = d2; bestIdx = i; }
+            }
+            if (bestIdx >= 0) { tx = state.robots[bestIdx].x; ty = state.robots[bestIdx].y; }
+        }
+        // Ease crosshair toward target
+        const alpha = 0.35;
+        const newX = state.crosshair.x + (tx - state.crosshair.x) * alpha;
+        const newY = state.crosshair.y + (ty - state.crosshair.y) * alpha;
+        // Synthesize a mousemove event to reuse shooting logic
+        applyEvent({ type: 'mousemove', payload: { x: newX, y: newY } });
+    }
+
+    // Visual-only smoothing for crosshair to improve perceived realism without affecting gameplay
+    function stepCrosshairVisual() {
+        const alpha = 0.25; // visual easing factor per frame
+        const tx = state.crosshair.x;
+        const ty = state.crosshair.y;
+        const vx = state.crosshairVisual.x + (tx - state.crosshairVisual.x) * alpha;
+        const vy = state.crosshairVisual.y + (ty - state.crosshairVisual.y) * alpha;
+        // Snap when close to avoid lingering sub-pixel drift
+        if (Math.abs(vx - tx) < 0.1) state.crosshairVisual.x = tx; else state.crosshairVisual.x = vx;
+        if (Math.abs(vy - ty) < 0.1) state.crosshairVisual.y = ty; else state.crosshairVisual.y = vy;
     }
 
     async function boot() {
@@ -490,6 +557,14 @@
                 lastInputFrame + 10,
                 5000 // safeguard
             );
+        }
+
+        // Enable AI control of crosshair when no recording is provided
+        aiEnabled = !recording;
+
+        // If AI is enabled (no recording), perform the canonical initial shot toward crosshairStart
+        if (aiEnabled && state.yrCanShoot) {
+            applyEvent({ type: 'mousemove', payload: { x: state.crosshair.x, y: state.crosshair.y } });
         }
 
         loop();
