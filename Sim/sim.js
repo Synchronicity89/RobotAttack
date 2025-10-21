@@ -241,7 +241,8 @@ class SimGame {
 
     // Gravity/friction
     if (fallingNow) {
-      this.player.vy += this.velChange / 8;
+      // Match Human gravity (velChange/4)
+      this.player.vy += this.velChange / 4;
     } else {
       if (!held('f')) this.player.vx *= 0.95;
       else this.player.vx = 0;
@@ -372,6 +373,30 @@ class SimGame {
       }
     }
     return { done, outcome, frame: this.frame };
+  }
+
+  // Stable summary for parity/validation: count, digest, nearestToOriginId
+  getRobotsSummary() {
+    const robots = this.robots || [];
+    const count = robots.length;
+
+    // nearest-to-origin by x^2 + y^2 (matches Human/AI Demo targeting policy)
+    let nearestToOriginId = null;
+    let best = Infinity;
+    for (const r of robots) {
+      const d2 = r.x * r.x + r.y * r.y;
+      if (d2 < best) { best = d2; nearestToOriginId = r.id; }
+    }
+
+    // Build sorted tuples (id asc) with rounded components
+    const tuples = robots
+      .slice()
+      .sort((a, b) => a.id - b.id)
+      .map(r => [r.id, Math.round(r.x), Math.round(r.y), Math.round(r.health * 1000)]);
+    const body = tuples.map(t => t.join(':')).join('|');
+    const digest = 'fnv:' + fnv1a32(body);
+
+    return { count, digest, nearestToOriginId };
   }
 
   // Lightweight digest to compare snapshots across implementations

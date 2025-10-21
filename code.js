@@ -55,6 +55,12 @@ const recording = {
   frames: 0,
   durationMs: 0
 };
+// Persist actual canvas world into the recording for parity
+try {
+  recording.world.width = mcw;
+  recording.world.height = mch;
+  recording.world.dpr = (typeof window !== 'undefined' && window.devicePixelRatio) ? window.devicePixelRatio : 1;
+} catch {}
 
 function randomBetween(min, max, precision){
     // Use seeded RNG
@@ -120,7 +126,7 @@ class Robot{
         this.idCounter ++;
     }
     drawSelf(){
-        mctx.fillStyle = colorString(0.5, 0.5, 0.5, 1);
+        mctx.fillStyle = colorString(0.5, 0.5, 0, 1);
         mctx.fillRect(this.x-yrm/2, this.y-yrm/2, yrm, yrm);
         mctx.strokeStyle = colorString(this.health, this.health, 0, 1);
         mctx.lineWidth = yrm/8;
@@ -287,8 +293,8 @@ if (typeof window !== "undefined") {
     yourRobot.lasers.push(initLaser);
     yourRobot.idCounter++;
     if (recordEnabled) {
-        // Record the initial aim/shot event at frame 0
-        recording.inputs.push({ frame: 0, type: 'mousemove', payload: { x: cs.x, y: cs.y } });
+      // Record the initial aim/shot event at frame 0
+      recording.inputs.push({ frame: 0, type: 'mousemove', payload: { x: cs.x, y: cs.y } });
     }
 }
 
@@ -445,6 +451,27 @@ function stepPhysics(){
     timer++;
     if (timer % 10 === 0) yrCanShoot = true;
 
+    // Validation snapshot (when recording is enabled)
+    try {
+        if (recordEnabled && recording) {
+            if (!Array.isArray(recording.validation)) recording.validation = [];
+            // Append every 60 frames (adjust cadence later if needed)
+            if (timer % 60 === 0) {
+                recording.validation.push({
+                    frame: timer,
+                    player: {
+                        x: yourRobot ? yourRobot.x : 0,
+                        y: yourRobot ? yourRobot.y : 0,
+                        vx: yourRobot ? yourRobot.velX : 0,
+                        vy: yourRobot ? yourRobot.velY : 0,
+                        health: yourRobot ? yourRobot.health : 1
+                    },
+                    robotsSummary: __getRobotsSummaryForValidation()
+                });
+            }
+        }
+    } catch {}
+
     // End-of-game detection and telemetry (best effort)
     const noEnemies = robots.length === 0;
     const playerDead = yourRobot.health <= 0;
@@ -468,18 +495,19 @@ function stepPhysics(){
         } catch {}
         // Save recording if enabled
         if (recordEnabled) {
-            recording.outcome = outcome;
-            recording.gameDrawn = gameDrawn;
-            recording.frames = timer;
-            recording.durationMs = Math.round(performance.now() - startMs);
-            try {
-                fetch('/recordings/save', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(recording)
-                }).then(r => r.ok ? r.json() : null)
-                  .catch(()=>{});
-            } catch {}
+          recording.outcome = outcome;
+          recording.gameDrawn = gameDrawn;
+          recording.frames = timer;
+          recording.durationMs = Math.round(performance.now() - startMs);
+          try {
+            fetch('/recordings/save', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(recording)
+            })
+            .then(r => r.ok ? r.json() : null)
+            .catch(()=>{});
+          } catch {}
         }
     }
 }
@@ -491,7 +519,7 @@ requestAnimationFrame(gameLoop);
 function keyDownEvent(event){
     keysDown.add((event.key || '').toLowerCase());
     if (recordEnabled) {
-        recording.inputs.push({ frame: timer, type: 'keydown', payload: { key: (event.key || '').toLowerCase() } });
+      recording.inputs.push({ frame: timer, type: 'keydown', payload: { key: (event.key || '').toLowerCase() } });
     }
 }
 document.removeEventListener("keydown", keyDownEvent);
@@ -500,7 +528,7 @@ document.addEventListener("keydown", keyDownEvent);
 function keyUpEvent(event){
     keysDown.delete((event.key || '').toLowerCase());
     if (recordEnabled) {
-        recording.inputs.push({ frame: timer, type: 'keyup', payload: { key: (event.key || '').toLowerCase() } });
+      recording.inputs.push({ frame: timer, type: 'keyup', payload: { key: (event.key || '').toLowerCase() } });
     }
 }
 document.removeEventListener("keyup", keyUpEvent);
@@ -518,7 +546,7 @@ function mcanMousemove(event){
         yourRobot.idCounter ++;
         yrCanShoot = false;
         if (recordEnabled) {
-            recording.inputs.push({ frame: timer, type: 'mousemove', payload: { x: pt.x, y: pt.y } });
+          recording.inputs.push({ frame: timer, type: 'mousemove', payload: { x: pt.x, y: pt.y } });
         }
     }
 }
@@ -549,3 +577,37 @@ console.error = function(...args) {
   clientLog('error', 'console.error', { args });
   __origConsoleError(...args);
 };
+
+// Lightweight hash for validation digests (independent of other implementations)
+function __fnv1a32(str){
+  let h = 0x811c9dc5 >>> 0;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return ('00000000' + h.toString(16)).slice(-8);
+}
+
+// Build a stable robots summary: count, digest over sorted tuples, and nearest-to-origin id
+function __getRobotsSummaryForValidation(){
+  try {
+    const list = Array.isArray(robots) ? robots : [];
+    const count = list.length;
+    // nearest-to-origin by x^2 + y^2 (canonical targeting policy)
+    let nearestToOriginId = null;
+    let best = Infinity;
+    for (const r of list) {
+      const d2 = r.x*r.x + r.y*r.y;
+      if (d2 < best) { best = d2; nearestToOriginId = r.id; }
+    }
+    // Sorted tuples: (id, round(x), round(y), round(health*1000))
+    const body = list.slice()
+      .sort((a,b)=>a.id-b.id)
+      .map(r => [r.id, Math.round(r.x), Math.round(r.y), Math.round(r.health*1000)].join(':'))
+      .join('|');
+    const digest = 'fnv:' + __fnv1a32(body);
+    return { count, digest, nearestToOriginId };
+  } catch {
+    return { count: 0, digest: 'fnv:00000000', nearestToOriginId: null };
+  }
+}
