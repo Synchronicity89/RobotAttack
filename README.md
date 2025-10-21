@@ -72,8 +72,20 @@ This repository is inspired by DeepMind's approach to Atari games, where AI agen
 - Canvas and canvas size: In the simulation/RL implementation, there is no HTML canvas. Interpret “canvas size” as world dimensions (width, height) used consistently by all implementations.
 
 ## Structure and Rules
-- Human implementation (Root): The mouse controls where the player robot shoots via mousemove events. The player fires one initial shot at frame 0 toward the canonical crosshairStart (200,200), then continues to fire on mousemove subject to cooldown. A crosshair cursor will be added after this commit. The player wins if all attacking robots are destroyed first; otherwise, the player loses.
+- Human implementation (Root): The mouse controls where the player robot shoots via mousemove events. The player fires one initial shot at frame 0 toward the canonical crosshairStart (200,200), then continues to fire on mousemove subject to cooldown. A crosshair cursor is rendered and follows the mouse in the Human game. The player wins if all attacking robots are destroyed first; otherwise, the player loses.
 - No sharing of code between implementations: The three implementations must not share runtime/game-logic code. They may share non-executable artifacts such as test specifications, schemas, and configuration files used for verification.
+
+### AI Demo crosshair behavior and input policy (minor fix)
+- Crosshair control in AI Demo is programmatic:
+  - When AI is enabled, the AI moves the crosshair each frame according to its policy, and shots are triggered by that policy subject to the same cooldown rules.
+  - When replaying a recorded Human session (AI disabled), the crosshair is driven by the replayed input timeline; positions/events are taken from the recording so replays are deterministic.
+- User input in the AI Demo page is non-interactive for gameplay:
+  - The browser will still show the user's normal mouse pointer, but mouse moves/clicks in the AI Demo UI do not control the crosshair and do not fire shots.
+  - This prevents accidental interference during AI control or deterministic replays and improves parity with recorded sessions.
+-
+Notes:
+- This change does not affect the Human game: the Human implementation continues to use the user's mouse position for aiming and mousemove-triggered shots.
+- The Control Panel continues to link to AI Demo replays on port 3001; behavior is unchanged aside from the clarified input policy above.
 
 ## Essential Game Logic Invariants (current human implementation)
 - World/canvas
