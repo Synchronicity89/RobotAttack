@@ -398,11 +398,77 @@ Pull requests and issues are welcome. Please see the development plan above for 
   - inputs: ordered list of { frame, type, payload }
   - outcome, gameDrawn, frames, durationMs
 - Replay:
-  - AI Demo loads a recording, disables AI control, replays inputs deterministically using the same world and seed
-  - Used to demonstrate parity and reassure manual testers
-  - Control Panel (human server):
-    - Buttons for “Start Recording,” “Stop Recording,” “Replay in AI Demo,” with file selector
-    - Optional “Parity Check” runs both human and sim with the same seed and input timeline and compares snapshots (TBD)
+  - AI Demo loads a recording, disables AI control, replays inputs deterministically using the same world and seed.
+  - The AI Demo prefers the live terminal state (win/loss) for end-of-game signage; recorded outcome remains for validation.
+  - Validation (planned): AI Demo computes periodic digests and compares to those recorded during Human play to detect divergence (see “Replay Determinism & Parity Plan”).
+
+## Replay Determinism & Parity Plan (Human -> AI Demo -> Sim)
+Goal: given the same seed, world, and input timeline, AI Demo replays should closely match Human outcomes, ideally frame-exact. We will converge incrementally with the following approach:
+
+1) Deterministic stepping contract (all implementations)
+   - Single fixed-timestep physics loop; render after physics. Already enforced.
+   - Input application order: apply inputs scheduled for frame N, then run one physics step, then draw.
+   - Termination: stop when terminal condition is reached (win/loss) or when an upper-bound frame budget is exhausted (recording.frames). Prefer terminal state over recorded frame count.
+   - Tolerances for parity tests: allow small position deltas (e.g., ±2 px) and health deltas (e.g., ±1e-3) when comparing across implementations.
+
+2) RNG stream policy
+   - All nondeterministic behavior must come from a seeded PRNG (mulberry32).
+   - Each implementation maintains its own PRNG instance; no sharing of code, but the logical order of RNG taps must match across implementations (e.g., ledge generation, robot spawn X, robot target distance, shooting schedules).
+   - Recording captures the single seed used. Optional future enhancement: record the per-frame rngTapCount; AI Demo can verify tap counts to detect divergence early without large payloads.
+
+3) Validation/Verification data (recorded by Human, optionally consumed by AI Demo)
+   - Purpose: detect divergence early and pinpoint root causes; improve parity without forcing code sharing.
+   - Recorded fields (proposed; emitted at a low cadence, e.g., every 30 frames):
+     - frame: number
+     - player: { x, y, vx, vy, health }
+     - robotsSummary: { count, digest }
+       - digest: a stable hash over sorted tuples (id, round(x), round(y), round(health*1000))
+     - rngTapCount: optional cumulative count of PRNG taps so far
+   - AI Demo behavior:
+     - On replay, compute the same digest on the same cadence and compare. If different, log a divergence record (frame, expectedDigest, actualDigest, deltas). Continue replay (no abort), but surface divergence in logs/telemetry.
+   - Storage options (incremental):
+     - v1: append validation blocks into the existing recording JSON under a “validation” array.
+     - v2: emit a sibling file (e.g., <runId>.validation.json) to keep recordings smaller.
+
+4) Mouse mapping and input fidelity
+   - Record the mapped canvas coordinates used for shots (already done implicitly by recording mousemove payloads).
+   - Keep Human and AI Demo mouse-to-canvas mapping consistent (DPR, layout); AI Demo should accept dimensions from world.json and clampPlayer consistently.
+
+5) Floating-point stability
+   - Use the same formulas and operation ordering across implementations where possible to avoid compounded drift (e.g., 1e-6 clamps, order of trig and normalization).
+   - Avoid in-loop collection mutations during forward iteration; prefer backward splicing (already implemented).
+
+6) Terminal state derivation
+   - Win: robots.length === 0 on the current frame.
+   - Loss: player.health <= 0 on the current frame.
+   - If both on the same frame, signal Win with gameDrawn = true (as documented).
+   - Prefer current state over recorded outcome when rendering end signage in AI Demo; recorded outcome remains useful for validation.
+
+## Logging (per implementation)
+- Location: ./logs/ (ignored by git)
+  - Human server: logs/human-server.log
+  - Human client (browser): logs/human-client.log (sent via POST /client-log)
+  - AI Demo server: logs/aidemo-server.log
+  - AI Demo client (browser): logs/aidemo-client.log (sent via POST /client-log)
+- Server logging
+  - Appends key events (startup, listen, telemetry received, recording saved/errors).
+  - Simple rotation: if a log exceeds ~1 MB, it is moved to .1.log and a fresh file continues.
+- Client logging
+  - The Human game and AI Demo attach window.onerror and unhandledrejection handlers, and mirror console.error.
+  - Logs are POSTed best-effort to each implementation’s /client-log endpoint and appended to the corresponding client log file.
+  - If fetch is unavailable (tests/offline), logging silently no-ops.
+- Telemetry files (JSON arrays)
+  - Human: ./data/human-telemetry.json
+  - AI Demo: ./data/aidemo-telemetry.json
+- Recordings
+  - Saved by Human server at ./data/recordings/<runId>.json when the Human game runs with ?record=1 and ends (Win/Loss).
+  - AI Demo lists files from /recordings and serves them from /data/recordings.
+
+How to inspect logs
+- Tail Human server log: tail -f logs/human-server.log
+- Tail Human client log: tail -f logs/human-client.log
+- Tail AI Demo server log: tail -f logs/aidemo-server.log
+- Tail AI Demo client log: tail -f logs/aidemo-client.log
 
 ## Phase 1 next steps (recommended order)
 1. Implement seed ingress (query param ?seed=..., or read world.json) and PRNG wiring.
