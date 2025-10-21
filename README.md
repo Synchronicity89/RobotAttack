@@ -325,70 +325,11 @@ Pull requests and issues are welcome. Please see the development plan above for 
 - Seed ingress: CLI flag (sim), env var/server arg or query param (?seed=1337) for human/aidemo (TBD)
 - Recording includes the exact seed used
 
-## Input Abstraction
-- Conflict resolution (canonical):
-  - A+D => cancel; W only when grounded; S only when grounded and not at bottom; F overrides horizontal inputs and zeroes velX while held
-- Human: real keyboard/mouse events
-- Sim/AIDemo: programmatic events via an input queue with timestamps (frame indices)
-- Crosshair default: until the first mousemove event, aim uses world.crosshairStart (canonical: 200,200). The frame-0 initial shot also uses this point.
-- Training-time default exploration (for Sim/NNet and AI Demo showcases):
-  - Generate frequent W/A/S/D key events; generate fewer F events; apply crosshair jitter to trigger shots.
-  - Exploration rates and annealing sourced from training config (see Training Loop).
-- Common event shape (suggested):
-  - type: "keydown" | "keyup" | "mousemove" | "action"
-  - payload: { key?: "w"|"a"|"s"|"d"|"f", x?: number, y?: number }
-  - frame: integer frame index
-- Parity: given identical event timelines and seeds, outcomes must match
-
-## Simulation Stepping Contract
-- Loop and timing model (canonical):
-  - Fixed-timestep physics; single loop per frame (physics -> render); possibly multiple physics steps per render to catch up
-  - API (suggested):
-    - init({ world, seed }): initialize with world dims and RNG seed
-    - reset(initialState?): return canonical initial state
-    - step(action, frames=1): advance N frames, returns { state, reward, done, info }
-- Time: frames are the unit; accelerated mode processes many frames per call while preserving event ordering
-
-## Physics and Collision Details (current human implementation)
-- Sizes: yrm = min(width,height)/20; player/enemy squares drawn with side yrm
-- Gravity: g = velChange/4 where velChange = canvasHeight/324
-- Jump velocity: -6*velChange; horizontal speed: ±3*velChange
-- Friction when grounded: velX *= 0.95
-- Player laser speed: 10 px/frame; enemy laser speed: 3*velChange (current behavior)
-- Collision detection policy:
-  - Lasers use continuous collision detection (segment vs AABB)
-  - Player grounding snaps to ledge top with epsilon to avoid jitter
-- Edge conditions:
-  - Lasers are removed when outside [0,width]x[0,height].
-  - Robots follow the configured enemyBoundaryMode; they are not culled offscreen in "original" mode.
-
-## Termination Conditions
-- Canonical signaling:
-  - Win: “Win” in green; Loss: “Loss” in red; simultaneous death and all-enemies-destroyed is treated as Win with gameDrawn = true.
-- Loss: player health <= 0 (physics/drawing loops stop)
-- Win: intended when all enemies destroyed (robots.length === 0), but not currently implemented as a termination; loop continues (TBD to formalize and signal “win”)
-- Episode end (sim): must emit done=true on loss or win (TBD to align human/aidemo)
-
-## Testing
-- Framework: Jest (no Mocha)
-- Environments: jsdom for human; Node for sim; browser or jsdom for AIDemo as needed
-- Test types:
-  - Unit tests for physics, collision, cooldowns, RNG determinism
-  - Golden-state snapshots at fixed frames for each implementation
-  - Cross-implementation parity tests with identical seeds and event timelines
-  - Schema validation tests for world.json and telemetry JSON
-- How to run: npm test (TBD scripts)
-- CI: TBD
-
-## Reward Shaping (high-level)
-- During training, accumulate a negative time penalty per step. At the end of an episode, scale this penalty by the fraction of remaining non-player robots to reduce or eliminate penalties when the player destroys all enemies.
-
-### Reward example (proposed)
-- Parameters: step penalty λ = 0.001; initialEnemies = 12
-- Accumulated steps S = 5000; timePenalty = -λ*S = -5.0
-- If remainingEnemies = 0 (win): scaledPenalty = 0; baseReward = +1; final = +1
-- If remainingEnemies = 3: scaledPenalty = timePenalty * (remainingEnemies/initialEnemies) = -5.0 * (3/12) = -1.25; baseReward = -1 on loss or +1 on win; example final (loss) = -2.25
-- Exact constants TBD; intent: no time penalty if all enemies are destroyed
+### RNG tap alignment checklist
+- Ledge generation: 18 draws in identical order/precision.
+- Robot spawn X and tarD: per-robot, fixed order.
+- Robot shooting schedules: number of schedules per robot, then (d, v) per schedule.
+- Any future randomness (e.g., laser speed multipliers) added in a consistent, documented order.
 
 ## Recording and Replay
 - Recording file (suggested path): ./data/recordings/<runId>.json
@@ -402,83 +343,92 @@ Pull requests and issues are welcome. Please see the development plan above for 
   - The AI Demo prefers the live terminal state (win/loss) for end-of-game signage; recorded outcome remains for validation.
   - Validation (planned): AI Demo computes periodic digests and compares to those recorded during Human play to detect divergence (see “Replay Determinism & Parity Plan”).
 
-## Replay Determinism & Parity Plan (Human -> AI Demo -> Sim)
-Goal: given the same seed, world, and input timeline, AI Demo replays should closely match Human outcomes, ideally frame-exact. We will converge incrementally with the following approach:
+### Validation snapshots (planned; appended into the recording)
+- Purpose: detect divergence early without altering replay (“no cheating”).
+- Shape (example, every 30 frames):
+  ```json
+  {
+    "validation": [
+      {
+        "frame": 0,
+        "player": { "x": 512, "y": 384, "vx": 0, "vy": 0, "health": 1 },
+        "robotsSummary": {
+          "count": 12,
+          "digest": "sha1:1f2a...e9",
+          "sample": [[0,512,700,1000],[1,120,680,1000]]
+        },
+        "rngTapCount": 42
+      }
+    ]
+  }
+  ```
+- Notes:
+  - digest: stable hash over a sorted list of tuples (id, round(x), round(y), round(health*1000)).
+  - rngTapCount: optional cumulative PRNG taps so far (for early drift detection).
+  - AI Demo recomputes and logs mismatches only; it does not mutate state.
 
-1) Deterministic stepping contract (all implementations)
-   - Single fixed-timestep physics loop; render after physics. Already enforced.
-   - Input application order: apply inputs scheduled for frame N, then run one physics step, then draw.
-   - Termination: stop when terminal condition is reached (win/loss) or when an upper-bound frame budget is exhausted (recording.frames). Prefer terminal state over recorded frame count.
-   - Tolerances for parity tests: allow small position deltas (e.g., ±2 px) and health deltas (e.g., ±1e-3) when comparing across implementations.
+## Simulation Stepping Contract
+- Loop and timing model (canonical):
+  - Fixed-timestep physics; single loop per frame (physics -> render); possibly multiple physics steps per render to catch up
+  - API (suggested):
+    - init({ world, seed }): initialize with world dims and RNG seed
+    - reset(initialState?): return canonical initial state
+    - step(action, frames=1): advance N frames, returns { state, reward, done, info }
+- Time: frames are the unit; accelerated mode processes many frames per call while preserving event ordering
 
-2) RNG stream policy
-   - All nondeterministic behavior must come from a seeded PRNG (mulberry32).
-   - Each implementation maintains its own PRNG instance; no sharing of code, but the logical order of RNG taps must match across implementations (e.g., ledge generation, robot spawn X, robot target distance, shooting schedules).
-   - Recording captures the single seed used. Optional future enhancement: record the per-frame rngTapCount; AI Demo can verify tap counts to detect divergence early without large payloads.
+### Input and stepping order (explicit)
+- For each frame N:
+  - Apply all inputs whose frame === N to the input abstraction.
+  - Run one physics step.
+  - Draw/render (if applicable).
 
-3) Validation/Verification data (recorded by Human, optionally consumed by AI Demo)
-   - Purpose: detect divergence early and pinpoint root causes; improve parity without forcing code sharing.
-   - Recorded fields (proposed; emitted at a low cadence, e.g., every 30 frames):
-     - frame: number
-     - player: { x, y, vx, vy, health }
-     - robotsSummary: { count, digest }
-       - digest: a stable hash over sorted tuples (id, round(x), round(y), round(health*1000))
-     - rngTapCount: optional cumulative count of PRNG taps so far
-   - AI Demo behavior:
-     - On replay, compute the same digest on the same cadence and compare. If different, log a divergence record (frame, expectedDigest, actualDigest, deltas). Continue replay (no abort), but surface divergence in logs/telemetry.
-   - Storage options (incremental):
-     - v1: append validation blocks into the existing recording JSON under a “validation” array.
-     - v2: emit a sibling file (e.g., <runId>.validation.json) to keep recordings smaller.
+### Deterministic world handshake
+- Sim and AI Demo accept width/height/dpr from world.json (or the recording’s world snapshot).
+- Fail fast (log/throw) when dimensions/device scale differ from canonical values.
 
-4) Mouse mapping and input fidelity
-   - Record the mapped canvas coordinates used for shots (already done implicitly by recording mousemove payloads).
-   - Keep Human and AI Demo mouse-to-canvas mapping consistent (DPR, layout); AI Demo should accept dimensions from world.json and clampPlayer consistently.
+### Tolerances (for parity assertions)
+- Positions: ±2 px per axis
+- Velocities: ±1e-3
+- Health: ±1e-3
+- Counts (robots/lasers): exact counts; digest-based match for positions/health.
 
-5) Floating-point stability
-   - Use the same formulas and operation ordering across implementations where possible to avoid compounded drift (e.g., 1e-6 clamps, order of trig and normalization).
-   - Avoid in-loop collection mutations during forward iteration; prefer backward splicing (already implemented).
+## Testing
+- Framework: Jest (no Mocha)
+- Environments: jsdom for human; Node for sim; browser or jsdom for AIDemo as needed
+- Test types:
+  - Unit tests for physics, collision, cooldowns, RNG determinism
+  - Golden-state snapshots at fixed frames for each implementation
+  - Cross-implementation parity tests with identical seeds and event timelines
+  - Schema validation tests for world.json and telemetry JSON
+- How to run: npm test (TBD scripts)
+- CI: TBD
 
-6) Terminal state derivation
-   - Win: robots.length === 0 on the current frame.
-   - Loss: player.health <= 0 on the current frame.
-   - If both on the same frame, signal Win with gameDrawn = true (as documented).
-   - Prefer current state over recorded outcome when rendering end signage in AI Demo; recorded outcome remains useful for validation.
+### Cross-implementation parity (planned, incremental)
+- Add tests that load a recorded session with validation digests and assert that AI Demo matches Human digests for the first N checkpoints (e.g., every 30 frames for 300 frames).
+- Verify RNG tap counts (if included) are monotonically increasing and within expected ranges at each checkpoint.
 
-## Logging (per implementation)
-- Location: ./logs/ (ignored by git)
-  - Human server: logs/human-server.log
-  - Human client (browser): logs/human-client.log (sent via POST /client-log)
-  - AI Demo server: logs/aidemo-server.log
-  - AI Demo client (browser): logs/aidemo-client.log (sent via POST /client-log)
-- Server logging
-  - Appends key events (startup, listen, telemetry received, recording saved/errors).
-  - Simple rotation: if a log exceeds ~1 MB, it is moved to .1.log and a fresh file continues.
-- Client logging
-  - The Human game and AI Demo attach window.onerror and unhandledrejection handlers, and mirror console.error.
-  - Logs are POSTed best-effort to each implementation’s /client-log endpoint and appended to the corresponding client log file.
-  - If fetch is unavailable (tests/offline), logging silently no-ops.
-- Telemetry files (JSON arrays)
-  - Human: ./data/human-telemetry.json
-  - AI Demo: ./data/aidemo-telemetry.json
-- Recordings
-  - Saved by Human server at ./data/recordings/<runId>.json when the Human game runs with ?record=1 and ends (Win/Loss).
-  - AI Demo lists files from /recordings and serves them from /data/recordings.
+### Sim/ parity tests (planned)
+- Sim vs Human (via recording):
+  - Load world/seed and input timeline from a short recording (win and loss fixtures).
+  - Step Sim for recording.frames frames, applying inputs by frame index.
+  - Compare Sim digests to recording validation for the first K checkpoints within tolerances.
+- Sim vs AI Demo:
+  - Run the same recording through AI Demo replay in jsdom and expose frame snapshots.
+  - Compare Sim digests to AI Demo digests at matching frames within tolerances.
 
-How to inspect logs
-- Tail Human server log: tail -f logs/human-server.log
-- Tail Human client log: tail -f logs/human-client.log
-- Tail AI Demo server log: tail -f logs/aidemo-server.log
-- Tail AI Demo client log: tail -f logs/aidemo-client.log
+### Schema validation (planned)
+- Validate world.json, recording.json (including validation snapshots when present), and telemetry JSON using Ajv in tests.
+- Record a version field in recording.json and bump on breaking changes.
 
-## Phase 1 next steps (recommended order)
-1. Implement seed ingress (query param ?seed=..., or read world.json) and PRNG wiring.
-2. Switch to a single fixed-timestep loop (physics -> render); keep the game speed stable.
-3. Add explicit player clamp and ledge snap (verify behavior matches README).
-4. Honor enemyBoundaryMode from world.json (original/bounce/splat) with a default of original.
-5. Replace in-loop splicing with safe removals (robots/lasers) consistently.
-6. Add win signage and draw handling; post telemetry to /telemetry on end-of-game.
-7. Verify DPI-safe mouse mapping in code (use getBoundingClientRect + canvas scale).
-8. Optional: add CCD for player/enemy lasers if included in Phase 1 scope; otherwise move to Phase 2.
+## Schemas and Versioning (planned)
+- world.json
+  - { width, height, dpr, seed, impl, enemyBoundaryMode, clampPlayer, crosshairStart, timestamp, schemaVersion }
+- recording.json
+  - { version, runId, world, seed, inputs[], outcome, gameDrawn, frames, durationMs, validation? }
+  - version: semantic version for the recording format; bump on incompatible changes.
+- telemetry JSON
+  - { impl, frames, outcome, gameDrawn, measuredWidth, measuredHeight, timestamp, ... }
+- Tests validate these schemas before parity checks.
 
 ## Logging (per implementation)
 - Location: ./logs/ (ignored by git)
