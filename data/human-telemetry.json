@@ -618,5 +618,15 @@
     "measuredHeight": 791,
     "seed": "444",
     "timestamp": "2025-10-21T18:08:20.731Z"
+  },
+  {
+    "impl": "human",
+    "outcome": "win",
+    "gameDrawn": false,
+    "frames": 1583,
+    "measuredWidth": 1536,
+    "measuredHeight": 791,
+    "seed": "444",
+    "timestamp": "2025-10-21T20:38:37.302Z"
   }
 ]

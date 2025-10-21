@@ -1,13 +1,13 @@
 'use strict';
 
-// Local, standalone seeded PRNG (no code sharing with Human/AIDemo)
-function mulberry32(seed) {
-  let t = (seed >>> 0) + 0x6D2B79F5;
-  return function () {
-    t += 0x6D2B79F5;
-    let r = Math.imul(t ^ (t >>> 15), 1 | t);
-    r ^= r + Math.imul(r ^ (r >>> 7), 61 | r);
-    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+// Local, standalone seeded PRNG matching HumanLib.mulberry32 (no runtime sharing)
+function mulberry32(a) {
+  a = a >>> 0;
+  return function() {
+    let t = a += 0x6D2B79F5;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
 
@@ -52,6 +52,10 @@ class SimGame {
     this.playerLasers = [];
     this.playerLaserId = 0;
     this.yrCanShoot = true;
+
+    // Fallback support: if a recording lacks the frame-0 mousemove that the
+    // Human code records, emit one initial shot toward crosshairStart.
+    this._initialShotChecked = false;
   }
 
   // Seeded helper like Human/AI Demo
@@ -79,7 +83,9 @@ class SimGame {
           arr.push({ d, v });
         }
         return arr;
-      })()
+      })(),
+      // Mirror Human constructor RNG tap for laserSpeed (even if unused)
+      laserSpeed: this.randBetween(2, 11, 1)
     };
   }
 
@@ -147,6 +153,9 @@ class SimGame {
       this.robots.push(this.makeRobot(i, mcw, mch, mcm));
     }
     this._hasRobots = this.robots.length > 0;
+
+    // Reset initial-shot check on new init
+    this._initialShotChecked = false;
   }
 
   // Queue inputs from recording: [{ frame, type, payload }]
@@ -303,17 +312,48 @@ class SimGame {
       }
     }
 
-    // Update robots: orbit motion, scheduled shooting, lasers advance and player hit
+    // Update robots: orbit motion (with optional boundary mode), scheduled shooting, lasers advance and player hit
     for (let i = this.robots.length - 1; i >= 0; i--) {
       const rb = this.robots[i];
-      // Orbit update
+      // Orbit update (compute proposed new position relative to player)
       const angle = Math.atan2(rb.y - this.player.y, rb.x - this.player.x);
       const dx = rb.x - this.player.x, dy = rb.y - this.player.y;
       const distance = Math.hypot(dx, dy) || 1e-6;
-      const newA = angle + rb.speed / distance;
+      let newA = angle + rb.speed / distance;
       const newD = distance + (rb.tarD - distance) / (100 / this.velChange);
-      rb.x = this.player.x + Math.cos(newA) * newD;
-      rb.y = this.player.y + Math.sin(newA) * newD;
+      let nx = this.player.x + Math.cos(newA) * newD;
+      let ny = this.player.y + Math.sin(newA) * newD;
+
+      // Apply enemy boundary behavior to mirror Human code.js
+      const mode = (this.world && typeof this.world.enemyBoundaryMode === 'string')
+        ? this.world.enemyBoundaryMode : 'original';
+      const half = this.yrm / 2;
+      if (mode === 'splat') {
+        // clamp inside arena
+        nx = Math.max(half, Math.min(mcw - half, nx));
+        ny = Math.max(half, Math.min(mch - half, ny));
+      } else if (mode === 'bounce') {
+        // reflect direction against walls and recompute forward
+        let a = newA;
+        // check X bounds first
+        if (nx < half || nx > mcw - half) {
+          a = Math.PI - a; // horizontal reflection
+        }
+        // apply reflection on X
+        nx = this.player.x + Math.cos(a) * newD;
+        // then check Y bounds
+        if (ny < half || ny > mch - half) {
+          a = -a; // vertical reflection
+        }
+        newA = a;
+        nx = this.player.x + Math.cos(newA) * newD;
+        ny = this.player.y + Math.sin(newA) * newD;
+        // keep inside after reflection
+        nx = Math.max(half, Math.min(mcw - half, nx));
+        ny = Math.max(half, Math.min(mch - half, ny));
+      }
+      rb.x = nx;
+      rb.y = ny;
 
       // Fire on schedule
       for (const st of rb.shootTimes) {
@@ -354,6 +394,18 @@ class SimGame {
     let done = false;
     let outcome = null;
     for (let i = 0; i < frames; i++) {
+      // Fallback initial shot at frame 0 if no recorded mousemove
+      if (!this._initialShotChecked && this.frame === 0) {
+        this._initialShotChecked = true;
+        const list = this.inputByFrame.get(0) || [];
+        const hasFrame0Move = list.some(ev => ev && ev.type === 'mousemove');
+        if (!hasFrame0Move && this.yrCanShoot) {
+          const cs = (this.world && this.world.crosshairStart) ? this.world.crosshairStart : { x: 200, y: 200 };
+          const angle = Math.atan2(cs.y - this.player.y, cs.x - this.player.x);
+          this.playerLasers.push({ id: this.playerLaserId++, x: this.player.x, y: this.player.y, angle });
+          this.yrCanShoot = false;
+        }
+      }
       // Apply frame-indexed inputs first
       this.applyInputsForFrame(this.frame);
       // Physics
