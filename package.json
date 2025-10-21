@@ -1,5 +1,5 @@
 {
-  "name": "RobotAttack",
+  "name": "robotattack",
   "version": "0.1.0",
   "private": true,
   "description": "Human game server and control panel for RobotAttack.",
@@ -9,8 +9,10 @@
     "start:aidemo": "node server/aidemo-server.js",
     "test": "sh -c 'mkdir -p logs; ts=$(date +%F_%H-%M-%S); jest --runInBand 2>&1 | tee logs/test-$ts.log | tee logs/test-latest.log > /dev/null'",
     "test:integration": "sh -c 'mkdir -p logs; ts=$(date +%F_%H-%M-%S); jest tests/integration --runInBand 2>&1 | tee logs/test-integration-$ts.log | tee logs/test-integration-latest.log > /dev/null'",
+    "test:win": "jest --runInBand",
     "sim:run": "node Sim/run-sim.js --rec=./data/recordings/sample-replay.json",
     "sim:run:latest": "node Sim/run-sim.js --latest",
+    "sim:assert-latest": "node Sim/run-sim.js --latest --assert",
     "sim:log": "cat logs/sim-run-latest.log || true",
     "sim:tail": "tail -f logs/sim-run-latest.log || true"
   },

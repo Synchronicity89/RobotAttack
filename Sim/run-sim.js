@@ -45,6 +45,20 @@ function resolveRecordingPath(args) {
   throw new Error('Recording path not provided. Use --rec=<path> or --latest with .latest present.');
 }
 
+(function explainFlags(){
+  if (process.argv.includes('--help') || process.argv.includes('-h')) {
+    console.log(`Usage: node Sim/run-sim.js --rec=./data/recordings/file.json [options]\n\n` +
+      `Options:\n` +
+      `  --latest                 Use the latest recorded file (via data/recordings/.latest)\n` +
+      `  --assert                 Exit with code 1 if any validation mismatch occurs (or none present)\n` +
+      `  --assert-up-to=N        Only require exact match for validation frames <= N (still logs later)\n` +
+      `  --no-require-validation Don’t fail when --assert is set but recording has no validation\n` +
+      `  --dump-on-mismatch      Log detailed robot tuples at the first mismatch frame\n` +
+      `  --env.SIM_EXTRA=N       Extra frames beyond recording.frames (default 1200)\n`);
+    process.exit(0);
+  }
+})();
+
 (async function main() {
   try {
     const recPath = resolveRecordingPath(process.argv.slice(2));
@@ -64,7 +78,7 @@ function resolveRecordingPath(args) {
       }
     }
 
-    const sim = new SimGame();
+  const sim = new SimGame();
     sim.init({ world, seed });
     sim.queueInputs(inputs);
 
@@ -83,6 +97,32 @@ function resolveRecordingPath(args) {
     // Parity counters
     let checks = 0, matches = 0;
     let firstMismatch = null;
+
+    // CLI flags
+    const argv = process.argv.slice(2);
+    const assertMode = argv.includes('--assert');
+    const noRequireValidation = argv.includes('--no-require-validation');
+    const dumpOnMismatch = argv.includes('--dump-on-mismatch');
+    let assertUpTo = null;
+    for (const a of argv) {
+      if (a.startsWith('--assert-up-to=')) {
+        const v = Number(a.split('=')[1]);
+        if (Number.isFinite(v)) assertUpTo = v;
+      }
+    }
+
+    function dumpRobotsDetail() {
+      try {
+        const robots = sim.robots.slice().sort((a,b)=>a.id-b.id);
+        const tuples = robots.map(r => ({
+          id: r.id,
+          x: Math.round(r.x),
+          y: Math.round(r.y),
+          h: Math.round(r.health*1000)
+        }));
+        out(`robots.detail tuples=${JSON.stringify(tuples)}`);
+      } catch {}
+    }
 
     while (sim.frame < hardCap) {
       const { done, outcome } = sim.step(1);
@@ -105,6 +145,7 @@ function resolveRecordingPath(args) {
           } else if (!firstMismatch) {
             firstMismatch = { frame: s.frame, expected: exp.robotsSummary, actual: got };
             out(`validation-mismatch frame=${s.frame} exp=${JSON.stringify(exp.robotsSummary)} got=${JSON.stringify(got)}`);
+            if (dumpOnMismatch) dumpRobotsDetail();
           }
         }
 
@@ -126,6 +167,27 @@ function resolveRecordingPath(args) {
       out(`validation summary: checks=${checks} matches=${matches}` + (firstMismatch ? ` firstMismatch.frame=${firstMismatch.frame}` : ' all-matched'));
     } else {
       out('validation summary: none-present-in-recording');
+    }
+
+    // Assert mode exit conditions for CI
+    if (assertMode) {
+      if (!validation && !noRequireValidation) {
+        out('assert: failing due to missing validation in recording (use --no-require-validation to ignore)');
+        process.exit(2);
+      }
+      if (validation) {
+        if (assertUpTo != null) {
+          if (firstMismatch && firstMismatch.frame <= assertUpTo) {
+            out(`assert: mismatch at frame=${firstMismatch.frame} within assert-up-to=${assertUpTo}`);
+            process.exit(1);
+          }
+        } else {
+          if (checks > 0 && matches < checks) {
+            out('assert: one or more validation frames mismatched');
+            process.exit(1);
+          }
+        }
+      }
     }
 
     out(`sim-run end recPath=${recPath} datedLog=${DATED_LOG} latestLog=${LATEST_LOG}`);
