@@ -14,10 +14,13 @@
     "sim:run:latest": "node Sim/run-sim.js --latest",
     "sim:assert-latest": "node Sim/run-sim.js --latest --assert",
     "sim:log": "cat logs/sim-run-latest.log || true",
-    "sim:tail": "tail -f logs/sim-run-latest.log || true"
+    "sim:tail": "tail -f logs/sim-run-latest.log || true",
+    "train:rl": "node NNet/train_rl.js --episodes=10 --max-steps=800"
   },
   "dependencies": {
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "@tensorflow/tfjs": "^4.20.0",
+    "@tensorflow/tfjs-backend-wasm": "^4.20.0"
   },
   "devDependencies": {
     "jest": "^29.7.0",

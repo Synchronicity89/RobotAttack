@@ -264,6 +264,15 @@ The following changes will be applied to the human implementation (canonical) to
 4. Tests
    - npm run test:integration
 
+## Training (experimental)
+- Kick off a quick RL training session that uses the headless Sim and saves a model under `NNet/policy_model/`:
+  - npm run train:rl
+- Hardware acceleration:
+  - The trainer auto-detects available backends. On Windows, if `@tensorflow/tfjs-node` or `@tensorflow/tfjs-node-gpu` is installed and your environment is set up (CUDA/cuDNN for GPU), the run will use the native TensorFlow backend. Otherwise, it falls back to pure JS (`@tensorflow/tfjs`), which is slower but portable.
+  - The script logs detected logical CPUs and whether a GPU backend is active.
+- Tuning activity vs. skill:
+  - Early episodes favor higher key press rates and larger crosshair movements; as episodes progress, exploration noise is annealed so a better policy can exhibit calmer inputs.
+
 ## Contributing
 Pull requests and issues are welcome. Please see the development plan above for guidance on where to contribute.
 
