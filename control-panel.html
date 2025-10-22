@@ -19,6 +19,10 @@
       <label>Seed (optional): <input id="seed" type="number" placeholder="fresh per run"></label>
       <button id="launch">Launch Human Game</button>
       <button id="launch-record">Record New Human Session</button>
+      <div style="margin-top:8px">
+        <button id="launch-l2">Launch Human Game (Level 2)</button>
+        <button id="launch-record-l2">Record Level 2 Session</button>
+      </div>
     </section>
 
     <section class="row">
@@ -101,6 +105,23 @@
         const seed = document.getElementById('seed').value;
         const params = new URLSearchParams();
         if (seed) params.set('seed', seed);
+        params.set('record', '1');
+        const url = `index.html?${params.toString()}`;
+        window.open(url, '_blank', 'noopener');
+      };
+      document.getElementById('launch-l2').onclick = () => {
+        const seed = document.getElementById('seed').value;
+        const params = new URLSearchParams();
+        if (seed) params.set('seed', seed);
+        params.set('level', '2');
+        const url = `index.html?${params.toString()}`;
+        window.open(url, '_blank', 'noopener');
+      };
+      document.getElementById('launch-record-l2').onclick = () => {
+        const seed = document.getElementById('seed').value;
+        const params = new URLSearchParams();
+        if (seed) params.set('seed', seed);
+        params.set('level', '2');
         params.set('record', '1');
         const url = `index.html?${params.toString()}`;
         window.open(url, '_blank', 'noopener');

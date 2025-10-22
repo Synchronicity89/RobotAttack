@@ -19,6 +19,14 @@ let bc = [102/255, 77/255, 51/255];
 let yrm = mcm/20;
 let velChange = mch/324;
 
+// Level selection via query param (?level=2 enables new mechanics)
+let level = 1;
+try {
+    const __lp = new URLSearchParams(window.location.search);
+    const lv = Number(__lp.get('level'));
+    if (Number.isFinite(lv) && lv >= 1) level = Math.floor(lv);
+} catch {}
+
 // Phase 1: end-of-game state and world config defaults
 let gameOver = false;
 let outcome = null;   // "win" | "loss"
@@ -73,6 +81,11 @@ class Ledge{
         this.y = randomBetween(0.1, 0.9, 0.01);
         this.x = randomBetween(0.1, 0.9, 0.01);
         this.w = randomBetween(1/16, 1/4, 0.01);
+        // Level 2+: motion params (sinusoid). Default 0 keeps Level 1 unchanged.
+        this.baseY = this.y;
+        this.amp = (level >= 2) ? randomBetween(0.05, 0.25, 0.01) : 0;
+        this.omega = (level >= 2) ? randomBetween(0.002, 0.01, 0.001) : 0;
+        this.phase = rand() * Math.PI * 2;
     }
     drawSelf(ctx, cw, ch){
         let a = (this.id/(ledgeCount-1))/2+0.25;
@@ -278,6 +291,14 @@ for (let i=0; i<12; i++) {
     let robot = new Robot(robots.length);
     robots.push(robot);
 }
+// Level 2 mothership (optional)
+let mothership = null;
+// Instantiate after classes are defined; defer via setTimeout to avoid TDZ
+if (level >= 2) {
+    setTimeout(() => {
+        try { if (!mothership) mothership = new Mothership(); } catch {}
+    }, 0);
+}
 // Expose for tests (jsdom doesn't bind top-level let to window)
 if (typeof window !== "undefined") {
     window.yourRobot = yourRobot;
@@ -333,8 +354,10 @@ function drawFrame(){
     ledgeOrder.forEach((ledge)=> ledge.drawSelf(mctx, mcw, mch));
     robots.forEach((robot)=> robot.lasers.forEach((laser)=> laser.drawSelf()));
     yourRobot.lasers.forEach((laser)=> laser.drawSelf());
+    if (mothership && mothership.health > 0) mothership.missiles.forEach((m)=> m.draw());
     robots.forEach((robot)=> robot.drawSelf());
     yourRobot.drawSelf();
+    if (mothership && mothership.health > 0) mothership.draw();
 
     // HUD bar
     mctx.fillStyle = colorString(0.7, 0, 0, 0.7);
@@ -348,6 +371,12 @@ function drawFrame(){
         mctx.textBaseline = "middle";
         mctx.fillStyle = (outcome === "win") ? "#00ff00" : "#ff0000";
         mctx.fillText((outcome === "win") ? "Win" : "Loss", mcw/2, mch/2);
+        // Small prompt to advance on win
+        if (outcome === "win") {
+            mctx.font = `${Math.floor(mcm/28)}px sans-serif`;
+            mctx.fillStyle = "#ffffff";
+            mctx.fillText("Press any key to play the next level", mcw/2, mch/2 + mcm/10);
+        }
         mctx.restore();
     }
 }
@@ -371,6 +400,17 @@ function stepPhysics(){
     // Integrate
     yourRobot.x += yourRobot.velX;
     yourRobot.y += yourRobot.velY;
+
+    // Update moving ledges (Level 2+): smooth vertical motion before collision checks
+    if (level >= 2) {
+        for (let i = 0; i < ledgeOrder.length; i++) {
+            const L = ledgeOrder[i];
+            if (L.amp && L.omega) {
+                const yRaw = L.baseY + L.amp * Math.sin((timer + L.phase) * L.omega);
+                L.y = yRaw;
+            }
+        }
+    }
 
     // Grounding and ledges with snap
     falling = true;
@@ -446,6 +486,17 @@ function stepPhysics(){
                 laser.y > nearestRobot.y-yrm && laser.y < nearestRobot.y+yrm) {
                 yourRobot.lasers.splice(i, 1);
                 nearestRobot.health -= 0.2;
+                continue;
+            }
+        }
+        // Level 2: also allow damaging the mothership AABB
+        if (mothership && mothership.health > 0) {
+            const msHalfW = mothership.w/2, msHalfH = mothership.h/2;
+            if (laser.x > mothership.x - msHalfW && laser.x < mothership.x + msHalfW &&
+                laser.y > mothership.y - msHalfH && laser.y < mothership.y + msHalfH) {
+                yourRobot.lasers.splice(i, 1);
+                mothership.health -= 0.2;
+                continue;
             }
         }
     }
@@ -465,6 +516,19 @@ function stepPhysics(){
         robot.health -= 1/1200;
         if (robot.health < 0) robot.remove();
     });
+
+    // Level 2: mothership update and missile vs player collision
+    if (mothership && mothership.health > 0) {
+        mothership.update();
+        for (let i = mothership.missiles.length - 1; i >= 0; i--) {
+            const m = mothership.missiles[i];
+            if (m.x > yourRobot.x-yrm/2 && m.x < yourRobot.x+yrm/2 &&
+                m.y > yourRobot.y-yrm/2 && m.y < yourRobot.y+yrm/2) {
+                mothership.missiles.splice(i, 1);
+                yourRobot.health -= 0.2; // missiles hit harder
+            }
+        }
+    }
 
     // Environment and regen
     if (yourRobot.y > mch-yrm*1.5) yourRobot.health -= 1/180;
@@ -496,7 +560,7 @@ function stepPhysics(){
     } catch {}
 
     // End-of-game detection and telemetry (best effort)
-    const noEnemies = robots.length === 0;
+    const noEnemies = (robots.length === 0) && (!mothership || mothership.health <= 0);
     const playerDead = yourRobot.health <= 0;
     if (noEnemies || playerDead) {
         gameDrawn = (noEnemies && playerDead);
@@ -540,6 +604,22 @@ requestAnimationFrame(gameLoop);
 
 // Update key handlers to use Set
 function keyDownEvent(event){
+    // On win, advance to next level on any key press
+    if (gameOver && outcome === 'win') {
+        try {
+            const url = new URL(window.location.href);
+            const cur = Number(url.searchParams.get('level')) || 1;
+            url.searchParams.set('level', String(cur + 1));
+            // Preserve other params (e.g., seed, record)
+            window.location.href = url.toString();
+            return;
+        } catch {
+            // fallback: simple hash reload
+            window.location.reload();
+            return;
+        }
+    }
+
     keysDown.add((event.key || '').toLowerCase());
     if (recordEnabled) {
       recording.inputs.push({ frame: timer, type: 'keydown', payload: { key: (event.key || '').toLowerCase() } });
@@ -636,4 +716,64 @@ function __getRobotsSummaryForValidation(){
   } catch {
     return { count: 0, digest: 'fnv:00000000', nearestToOriginId: null };
   }
+}
+
+// Level 2: Mothership and heavy missiles
+class Mothership {
+    constructor() {
+        this.health = 10;
+        this.w = Math.max(yrm*3, mcm/10);
+        this.h = Math.max(yrm*2, mcm/14);
+        this.x = mcw/2;
+        this.y = mch*0.2;
+        this.velX = Math.max(velChange * 0.5, 0.5);
+        this.missiles = [];
+        this.idCounter = 0;
+        this.firePeriod = 180; // frames between shots
+    }
+    update() {
+        // Drift horizontally and bounce off edges
+        this.x += this.velX;
+        if (this.x < this.w/2 || this.x > mcw - this.w/2) this.velX *= -1;
+        // Fire toward player on a schedule
+        if (timer % this.firePeriod === 0) {
+            const ang = Math.atan2(yourRobot.y - this.y, yourRobot.x - this.x);
+            this.missiles.push(new Missile(this.idCounter++, this.x, this.y, ang));
+        }
+        // Advance missiles; offscreen cull handled in step loop
+        for (let i = this.missiles.length - 1; i >= 0; i--) {
+            this.missiles[i].step();
+            const m = this.missiles[i];
+            if (m.x < 0 || m.x > mcw || m.y < 0 || m.y > mch) this.missiles.splice(i, 1);
+        }
+    }
+    draw() {
+        // Body and health bar
+        mctx.fillStyle = colorString(0.7, 0.1, 0.7, 1);
+        mctx.fillRect(this.x - this.w/2, this.y - this.h/2, this.w, this.h);
+        mctx.fillStyle = colorString(0.9, 0.2, 0.9, 1);
+        const hw = this.w * (Math.max(this.health, 0) / 10);
+        mctx.fillRect(this.x - this.w/2, this.y - this.h/2 - yrm/4, hw, Math.max(yrm/8, 4));
+        // Missiles
+        this.missiles.forEach(m => m.draw());
+    }
+}
+
+class Missile {
+    constructor(id, x, y, angle) {
+        this.id = id;
+        this.x = x; this.y = y; this.angle = angle;
+        this.speed = Math.max(velChange * 2, 2);
+        this.r = Math.max(yrm/6, 4);
+    }
+    step() {
+        this.x += Math.cos(this.angle) * this.speed;
+        this.y += Math.sin(this.angle) * this.speed;
+    }
+    draw() {
+        mctx.fillStyle = colorString(1, 0.3, 0.1, 1);
+        mctx.beginPath();
+        mctx.arc(this.x, this.y, this.r, 0, Math.PI*2);
+        mctx.fill();
+    }
 }

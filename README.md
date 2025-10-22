@@ -29,6 +29,7 @@ This repository is inspired by DeepMind's approach to Atari games, where AI agen
 - AI Demo (direct URL, optional):
   - http://localhost:3001/AIDemo/index.html
 - Seeds: When supported, pass a seed via query param (?seed=1234) or Control Panel input.
+- Levels: Use the level query param to enable new mechanics in the Human game. Example: ?level=2
 - Run tests:
   - npm run test:integration
 
@@ -120,6 +121,41 @@ Notes:
   - 18 ledges, random positions, sorted by y ascending; landing when player bottom is near ledge y within ±(velY+1) and horizontally within ledge width plus player half-size
 - Rendering (human)
   - Background fill; ledges; lasers; robots; player; HUD bar at bottom
+
+## Levels (Human first; others follow)
+
+Starting with the Human implementation, additional level mechanics can be toggled via a query param. The default (no param or level=1) preserves the original gameplay. Higher levels accumulate features from previous levels.
+
+- Launch syntax:
+  - Human: http://localhost:3000/index.html?level=2 (or 3)
+  - Default remains level=1 if omitted
+
+### Level 2 (implemented in Human)
+- Mothership: A large enemy appears near the top of the screen.
+  - Moves slowly and purposefully horizontally, bouncing at screen edges.
+  - Fires heavy missiles at intervals toward the player.
+  - High health; requires multiple hits to destroy.
+  - Player lasers can damage the mothership in addition to the standard “nearest-to-origin” robot logic (this change applies only in Level 2+).
+- Moving ledges: Platforms now move smoothly up and down (sinusoidal).
+  - Some ledges can dip below the bottom into the lava region.
+  - If the player is standing on a descending ledge, it can dunk the player into lava, causing damage per existing lava rules.
+  - Motion is smooth and per-ledge randomized (amplitude, phase, and speed).
+
+Notes:
+- Level 2 is gated so Level 1 behavior and tests remain unchanged.
+- AI Demo/Sim implementations will pick up these mechanics in a later step to keep parity.
+
+### Level 3 (design only, not implemented yet)
+- Vertical enemy laser bars:
+  - Tall vertical beams (taking ~25–33% of screen height) that move horizontally across the screen.
+  - They spawn at vertically random positions and travel sideways; contact with the player deals damage.
+  - Appear in bursts to force evasive movement.
+- Blue hearts (health pickups):
+  - Appear above ledges at various times.
+  - Touching a blue heart increases the player’s health (up to the usual cap), encouraging navigation and recovery.
+
+Accumulation:
+- Level 3 includes all of Level 2 mechanics (mothership + moving/dunking ledges) in addition to laser bars and blue hearts.
 
 ## Canonical Human Implementation: Proposed Fixes for Determinism and Parity
 The following changes will be applied to the human implementation (canonical) to preserve gameplay feel while improving determinism and parity. Other implementations will target this behavior.

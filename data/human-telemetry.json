@@ -778,5 +778,145 @@
     "measuredHeight": 791,
     "seed": "444",
     "timestamp": "2025-10-22T01:24:31.276Z"
+  },
+  {
+    "impl": "human",
+    "outcome": "loss",
+    "gameDrawn": false,
+    "frames": 1415,
+    "measuredWidth": 1536,
+    "measuredHeight": 791,
+    "seed": null,
+    "timestamp": "2025-10-22T01:35:20.192Z"
+  },
+  {
+    "impl": "human",
+    "outcome": "win",
+    "gameDrawn": false,
+    "frames": 1810,
+    "measuredWidth": 1536,
+    "measuredHeight": 791,
+    "seed": null,
+    "timestamp": "2025-10-22T03:37:25.550Z"
+  },
+  {
+    "impl": "human",
+    "outcome": "loss",
+    "gameDrawn": false,
+    "frames": 269,
+    "measuredWidth": 1222,
+    "measuredHeight": 667,
+    "seed": null,
+    "timestamp": "2025-10-22T03:42:12.369Z"
+  },
+  {
+    "impl": "human",
+    "outcome": "loss",
+    "gameDrawn": false,
+    "frames": 217,
+    "measuredWidth": 1222,
+    "measuredHeight": 667,
+    "seed": null,
+    "timestamp": "2025-10-22T03:42:35.100Z"
+  },
+  {
+    "impl": "human",
+    "outcome": "loss",
+    "gameDrawn": false,
+    "frames": 247,
+    "measuredWidth": 1222,
+    "measuredHeight": 667,
+    "seed": null,
+    "timestamp": "2025-10-22T03:42:49.351Z"
+  },
+  {
+    "impl": "human",
+    "outcome": "loss",
+    "gameDrawn": false,
+    "frames": 727,
+    "measuredWidth": 1222,
+    "measuredHeight": 667,
+    "seed": null,
+    "timestamp": "2025-10-22T03:54:01.495Z"
+  },
+  {
+    "impl": "human",
+    "outcome": "loss",
+    "gameDrawn": false,
+    "frames": 929,
+    "measuredWidth": 1222,
+    "measuredHeight": 667,
+    "seed": null,
+    "timestamp": "2025-10-22T03:54:27.109Z"
+  },
+  {
+    "impl": "human",
+    "outcome": "loss",
+    "gameDrawn": false,
+    "frames": 749,
+    "measuredWidth": 1222,
+    "measuredHeight": 667,
+    "seed": null,
+    "timestamp": "2025-10-22T04:03:16.734Z"
+  },
+  {
+    "impl": "human",
+    "outcome": "win",
+    "gameDrawn": false,
+    "frames": 1459,
+    "measuredWidth": 1222,
+    "measuredHeight": 667,
+    "seed": null,
+    "timestamp": "2025-10-22T04:03:45.757Z"
+  },
+  {
+    "impl": "human",
+    "outcome": "loss",
+    "gameDrawn": false,
+    "frames": 679,
+    "measuredWidth": 1222,
+    "measuredHeight": 667,
+    "seed": null,
+    "timestamp": "2025-10-22T04:03:57.169Z"
+  },
+  {
+    "impl": "human",
+    "outcome": "loss",
+    "gameDrawn": false,
+    "frames": 1460,
+    "measuredWidth": 1222,
+    "measuredHeight": 667,
+    "seed": null,
+    "timestamp": "2025-10-22T04:04:27.268Z"
+  },
+  {
+    "impl": "human",
+    "outcome": "loss",
+    "gameDrawn": false,
+    "frames": 1497,
+    "measuredWidth": 1222,
+    "measuredHeight": 667,
+    "seed": null,
+    "timestamp": "2025-10-22T04:04:55.644Z"
+  },
+  {
+    "impl": "human",
+    "outcome": "loss",
+    "gameDrawn": false,
+    "frames": 774,
+    "measuredWidth": 1222,
+    "measuredHeight": 667,
+    "seed": null,
+    "timestamp": "2025-10-22T04:05:12.891Z"
+  },
+  {
+    "impl": "human",
+    "outcome": "loss",
+    "gameDrawn": false,
+    "frames": 1317,
+    "measuredWidth": 1222,
+    "measuredHeight": 667,
+    "seed": null,
+    "timestamp": "2025-10-22T04:05:37.755Z"
   }
 ]
