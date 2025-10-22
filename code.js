@@ -21,11 +21,23 @@ let velChange = mch/324;
 
 // Level selection via query param (?level=2 enables new mechanics)
 let level = 1;
+let __explicitLevelRequested = false;
 try {
     const __lp = new URLSearchParams(window.location.search);
     const lv = Number(__lp.get('level'));
-    if (Number.isFinite(lv) && lv >= 1) level = Math.floor(lv);
+    if (Number.isFinite(lv) && lv >= 1) { level = Math.floor(lv); __explicitLevelRequested = true; }
 } catch {}
+
+// Mode selection via query param (?mode=realistic|diagnostic). Default: diagnostic (non-breaking)
+let mode = 'diagnostic';
+try {
+    const __mp = new URLSearchParams(window.location.search);
+    const m = String(__mp.get('mode') || 'diagnostic').toLowerCase();
+    if (m === 'realistic') mode = 'realistic';
+} catch {}
+
+// Enforce Realistic: cannot start at Level > 1
+let __blockedByMode = (mode === 'realistic' && __explicitLevelRequested && level > 1);
 
 // Phase 1: end-of-game state and world config defaults
 let gameOver = false;
@@ -57,6 +69,8 @@ const recording = {
   runId,
   world: { width: 0, height: 0, crosshairStart: (typeof world !== 'undefined' && world && world.crosshairStart) ? world.crosshairStart : { x: 200, y: 200 } },
   seed: __sp.has('seed') ? Number(__sp.get('seed')) : null,
+    mode,
+    level,
   inputs: [],
   outcome: null,
   gameDrawn: false,
@@ -573,6 +587,8 @@ function stepPhysics(){
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     impl: "human",
+                    mode,
+                    level,
                     outcome, gameDrawn,
                     frames: timer,
                     measuredWidth: mcw, measuredHeight: mch,
@@ -599,8 +615,24 @@ function stepPhysics(){
     }
 }
 
-// Start the single game loop
-requestAnimationFrame(gameLoop);
+// Start the single game loop (or block if mode contradiction)
+if (!__blockedByMode) {
+    requestAnimationFrame(gameLoop);
+} else {
+    // Draw a blocking overlay to indicate Realistic mode prohibits skipping levels
+    drawFrame();
+    mctx.save();
+    mctx.fillStyle = colorString(0, 0, 0, 0.6);
+    mctx.fillRect(0, 0, mcw, mch);
+    mctx.fillStyle = colorString(1, 0.5, 0.5, 1);
+    mctx.font = `bold ${Math.floor(mcm/14)}px sans-serif`;
+    mctx.textAlign = 'center'; mctx.textBaseline = 'middle';
+    mctx.fillText(`Realistic mode prohibits skipping to Level ${level}`, mcw/2, mch/2 - mcm/16);
+    mctx.font = `${Math.floor(mcm/24)}px sans-serif`;
+    mctx.fillStyle = colorString(1, 1, 1, 1);
+    mctx.fillText('Remove ?level>1 or switch to ?mode=diagnostic', mcw/2, mch/2 + mcm/16);
+    mctx.restore();
+}
 
 // Update key handlers to use Set
 function keyDownEvent(event){

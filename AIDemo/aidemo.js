@@ -2,6 +2,7 @@
     const canvas = document.getElementById('aidemo');
     const ctx = canvas.getContext('2d');
     const bannerEl = document.getElementById('banner');
+    const levelSelectEl = document.getElementById('levelSelect');
 
     const bc = [102 / 255, 77 / 255, 51 / 255]; // background color
     let world = {
@@ -13,6 +14,60 @@
 
     function setBanner(text) {
         if (bannerEl) bannerEl.textContent = text;
+    }
+
+    // Read level from URL (?level=1|2); default to 1
+    function getSelectedLevel() {
+        const sp = new URLSearchParams(window.location.search);
+        const lv = sp.get('level');
+        const n = Number(lv);
+        if (lv === '2' || n === 2) return 2;
+        return 1;
+    }
+
+    function updateLevelSelectorUI(level) {
+        if (!levelSelectEl) return;
+        levelSelectEl.value = String(level);
+        levelSelectEl.onchange = () => {
+            const sp = new URLSearchParams(window.location.search);
+            sp.set('level', levelSelectEl.value);
+            // Preserve existing rec/seed params
+            const url = `${window.location.pathname}?${sp.toString()}`;
+            window.location.replace(url);
+        };
+    }
+
+    function getMode() {
+        const sp = new URLSearchParams(window.location.search);
+        const m = String(sp.get('mode') || 'diagnostic').toLowerCase();
+        return (m === 'realistic') ? 'realistic' : 'diagnostic';
+    }
+
+    function enforceModeOrBlock(level, recordingMeta) {
+        const mode = state.mode || 'diagnostic';
+        if (mode !== 'realistic') return true;
+        // Realistic: must start at Level 1; deny starting at >1 or replaying a >1 recording as the first level
+        const requestedLevel = Math.max(1, Math.floor(level || 1));
+        const recLevel = recordingMeta && (Number(recordingMeta.level) || Number(recordingMeta?.world?.level));
+        const firstLevel = Number.isFinite(recLevel) ? Math.max(1, Math.floor(recLevel)) : requestedLevel;
+        if (firstLevel > 1) {
+            // Block
+            drawFrame();
+            const mcw = canvas.width, mch = canvas.height; const mcm = Math.min(mcw, mch);
+            ctx.save();
+            ctx.fillStyle = 'rgba(0,0,0,0.6)';
+            ctx.fillRect(0,0,mcw,mch);
+            ctx.fillStyle = '#ff8080';
+            ctx.font = `bold ${Math.floor(mcm/14)}px sans-serif`;
+            ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            ctx.fillText('Realistic mode prohibits skipping to Level ' + firstLevel, mcw/2, mch/2 - mcm/16);
+            ctx.font = `normal ${Math.floor(mcm/24)}px sans-serif`;
+            ctx.fillText('Remove ?level>1 (or pick Level 1) or switch to ?mode=diagnostic', mcw/2, mch/2 + mcm/16);
+            ctx.restore();
+            setBanner('Blocked: Realistic mode forbids skipping levels');
+            return false;
+        }
+        return true;
     }
 
     // Seedable RNG and helpers for ledges
@@ -404,12 +459,21 @@
     let policyMode = 'heuristic'; // 'heuristic' | 'policy'
 
     async function tryLoadPolicyModel() {
-        // Try to load a saved policy model from the server. If tfjs is not present, inject from CDN.
-        const modelUrl = '/NNet/policy_model/model.json';
-        try {
-            const r = await fetch(modelUrl, { cache: 'no-store' });
-            if (!r.ok) return false;
-        } catch { return false; }
+        // Try to load a saved policy model from the server. Prefer per-level, then all-levels, then default.
+        const lv = Math.max(1, Math.floor(state.level || 1));
+        const candidates = [
+            `/NNet/policy_model/level-${lv}/model.json`,
+            '/NNet/policy_model/all-levels/model.json',
+            '/NNet/policy_model/model.json'
+        ];
+        let modelUrl = null;
+        for (const url of candidates) {
+            try {
+                const r = await fetch(url, { cache: 'no-store' });
+                if (r.ok) { modelUrl = url; break; }
+            } catch { /* try next */ }
+        }
+        if (!modelUrl) return false;
         // Ensure tfjs is loaded
         if (typeof window.tf === 'undefined') {
             await new Promise((resolve, reject) => {
@@ -444,7 +508,7 @@
             ndy = by / Math.max(1, mch);
             nd = d / Math.max(1, Math.hypot(mcw, mch));
         }
-        return [
+        const base = [
             p.x / Math.max(1, mcw),
             p.y / Math.max(1, mch),
             p.vx / Math.max(1, mch/20),
@@ -454,6 +518,11 @@
             state.yrCanShoot ? 1 : 0,
             ndx, ndy, nd
         ];
+        // Append level one-hot like trainer: [L1, L2, L3+]
+        const lv = Math.max(1, Math.floor(state.level || 1));
+        const oneHot = [0,0,0];
+        oneHot[Math.min(2, lv-1)] = 1;
+        return base.concat(oneHot);
     }
 
     function applyAIAction(action) {
@@ -522,6 +591,8 @@
                     frames: state.frame,
                     measuredWidth: canvas.width,
                     measuredHeight: canvas.height,
+                    mode: state.mode || 'diagnostic',
+                    level: state.level || 1,
                     outcome: computedOutcome,
                     gameDrawn: drawn
                 })
@@ -609,6 +680,10 @@
     }
 
     async function boot() {
+    // Initialize mode and level from URL and sync selector UI
+    state.mode = getMode();
+    state.level = getSelectedLevel();
+        updateLevelSelectorUI(state.level);
         await loadConfig();
         initFromWorld();
 
@@ -620,7 +695,7 @@
             setBanner('AI Demo: No recording provided (?rec=/data/recordings/your-file.json)');
         }
 
-        recording = await loadRecording();
+    recording = await loadRecording();
 
         // Seed RNG deterministically for ledges (and robots)
         const seedParam = (new URLSearchParams(window.location.search)).get('seed');
@@ -629,6 +704,12 @@
                 : null;
         if (seed != null && typeof HumanLib !== 'undefined' && typeof HumanLib.mulberry32 === 'function') {
             rand = HumanLib.mulberry32(Number(seed));
+        }
+
+        // Enforce mode rules before world build
+        if (!enforceModeOrBlock(state.level, recording)) {
+            // Stop early due to contradiction
+            return;
         }
 
         // Build ledges deterministically
@@ -676,7 +757,7 @@
         // If AI is enabled, try loading a trained policy model in the background
         if (aiEnabled) {
             tryLoadPolicyModel().then((ok) => {
-                if (ok) { policyMode = 'policy'; setBanner('AI Demo (Policy)'); }
+                if (ok) { policyMode = 'policy'; setBanner(`AI Demo (Policy L${state.level})`); }
             });
         }
 

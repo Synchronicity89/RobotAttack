@@ -16,7 +16,10 @@
     "sim:log": "cat logs/sim-run-latest.log || true",
     "sim:tail": "tail -f logs/sim-run-latest.log || true",
     "sim:measure:hover": "node Sim/measure_top_hover.js --trials=5 --frames=180",
-    "train:rl": "node NNet/train_rl.js --episodes=10 --max-steps=800"
+    "train:rl": "node NNet/train_rl.js --episodes=10 --max-steps=800",
+    "train:rl:level1": "node NNet/train_rl.js --episodes=20 --max-steps=1000 --level=1 --save-dir=./NNet/policy_model/level-1",
+    "train:rl:level2": "node NNet/train_rl.js --episodes=20 --max-steps=1000 --level=2 --save-dir=./NNet/policy_model/level-2",
+    "train:rl:all": "node NNet/train_rl.js --episodes=40 --max-steps=1000 --level=all --save-dir=./NNet/policy_model/all-levels"
   },
   "dependencies": {
     "express": "^4.19.2",

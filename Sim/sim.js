@@ -25,6 +25,7 @@ class SimGame {
   constructor() {
     this.rand = Math.random;
     this.world = { width: 0, height: 0, dpr: 1, clampPlayer: true };
+    this.level = 1; // level conditioning for RL; Human adds features by level
     this.frame = 0;
     this.timer = 0;
     this.yrm = 0;
@@ -112,12 +113,17 @@ class SimGame {
     }
   }
 
-  init({ world, seed }) {
+  init({ world, seed, level }) {
     const w = world || {};
     this.world.width = Number(w.width) || (globalThis.innerWidth || 1024);
     this.world.height = Number(w.height) || (globalThis.innerHeight || 768);
     this.world.dpr = Number(w.dpr) || 1;
     this.world.clampPlayer = (w.clampPlayer === undefined) ? true : !!w.clampPlayer;
+  // Level/mode: prefer explicit args, then world, fallback defaults
+    const lv = (level != null) ? Number(level) : (w.level != null ? Number(w.level) : 1);
+    this.level = Number.isFinite(lv) && lv >= 1 ? Math.floor(lv) : 1;
+  const modeStr = (w.mode || 'diagnostic');
+  this.mode = (String(modeStr).toLowerCase() === 'realistic') ? 'realistic' : 'diagnostic';
 
     const mcw = this.world.width, mch = this.world.height;
     const mcm = Math.min(mcw, mch);
@@ -469,6 +475,8 @@ class SimGame {
     return {
       frame: this.frame,
       timer: this.timer,
+      level: this.level,
+      mode: this.mode || 'diagnostic',
       player: { ...this.player },
       robotsCount: this.robots.length,
       digest: this.digest()

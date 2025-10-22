@@ -23,3 +23,6 @@ reverted/
 
 # Data folder
 data/
+
+# Policy folder
+/NNet/policy_model/

@@ -29,7 +29,7 @@ This repository is inspired by DeepMind's approach to Atari games, where AI agen
 - AI Demo (direct URL, optional):
   - http://localhost:3001/AIDemo/index.html
 - Seeds: When supported, pass a seed via query param (?seed=1234) or Control Panel input.
-- Levels: Use the level query param to enable new mechanics in the Human game. Example: ?level=2
+- Levels: Use the level query param to enable new mechanics in the Human game. Example: ?level=2. The AI Demo page also has a top-right Level selector (or use ?level=1|2) that influences the policy model it loads and the observation conditioning.
 - Run tests:
   - npm run test:integration
 
@@ -156,6 +156,32 @@ Notes:
 
 Accumulation:
 - Level 3 includes all of Level 2 mechanics (mothership + moving/dunking ledges) in addition to laser bars and blue hearts.
+
+## Modes: Realistic vs Diagnostic (all implementations)
+
+All three implementations (Human game, Sim/RL Training, and AI Mode — both replays and AI-driven) support two modes that determine how levels are entered and progressed. This ensures we can both play/train “as a campaign” and also run targeted diagnostics at higher levels.
+
+- Realistic mode
+  - Intent: campaign-like play and training that doesn’t skip ahead.
+  - Behavior: All play/replay/simulation/training starts at Level 1. On a win, the next level is entered. Skipping directly to Level 2+ is disallowed.
+  - Enforcement: Any attempt to force a higher starting level (e.g., `?level=2` or a recording whose first level is > 1) is rejected. An error is shown and the run will not proceed until corrected.
+
+- Diagnostic mode
+  - Intent: targeted testing or training of higher levels.
+  - Behavior: You may start at any level (e.g., `?level=2`) for play, replay, sim, or training.
+
+How to select a mode
+- Human and AI Demo (browser): pass a query param `?mode=realistic` (or `?mode=diagnostic`).
+  - Examples:
+    - Human: `http://localhost:3000/index.html?mode=realistic` (starts at Level 1 and advances on win)
+    - AI Demo: `http://localhost:3001/AIDemo/index.html?mode=diagnostic&level=2`
+  - If omitted, the default is diagnostic (to preserve existing workflows/tests).
+- RL Trainer (Node): pass `--mode=realistic|diagnostic` to `NNet/train_rl.js` (npm scripts accept extra `-- ...`).
+
+Contradiction handling
+- If mode=realistic and a starting level > 1 is requested (via URL, CLI, or recording metadata), the run logs an error and halts before starting.
+- This prevents mixed/confusing states (e.g., “realistic mode” honoring `?level=2`).
+- Mode is included in logs and saved artifacts (telemetry, run metadata) for traceability.
 
 ## Canonical Human Implementation: Proposed Fixes for Determinism and Parity
 The following changes will be applied to the human implementation (canonical) to preserve gameplay feel while improving determinism and parity. Other implementations will target this behavior.
@@ -303,6 +329,15 @@ The following changes will be applied to the human implementation (canonical) to
 ## Training (experimental)
 - Kick off a quick RL training session that uses the headless Sim and saves a model under `NNet/policy_model/`:
   - npm run train:rl
+- Per-level and unified training:
+  - npm run train:rl:level1 → saves to `./NNet/policy_model/level-1/`
+  - npm run train:rl:level2 → saves to `./NNet/policy_model/level-2/`
+  - npm run train:rl:all → curriculum across levels 1/2; saves to `./NNet/policy_model/all-levels/`
+  - The trainer appends a level one-hot feature to observations: [L1, L2, L3+].
+- AI Demo model loading behavior:
+  - When AI is enabled (no ?rec=...), the AI Demo attempts to load a model in this order based on `?level=`: `NNet/policy_model/level-{level}/model.json`, then `NNet/policy_model/all-levels/model.json`, then `NNet/policy_model/model.json`.
+  - If no model is found, it falls back to a simple heuristic controller.
+  - The AI Demo conditions observations with the selected level one-hot so models trained with level context work as expected.
 - Hardware acceleration:
   - The trainer auto-detects available backends. On Windows, if `@tensorflow/tfjs-node` or `@tensorflow/tfjs-node-gpu` is installed and your environment is set up (CUDA/cuDNN for GPU), the run will use the native TensorFlow backend. Otherwise, it falls back to pure JS (`@tensorflow/tfjs`), which is slower but portable.
   - The script logs detected logical CPUs and whether a GPU backend is active.

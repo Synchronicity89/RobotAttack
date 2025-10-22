@@ -41,6 +41,8 @@ const MAX_STEPS = Number(args['max-steps'] || 1200);
 const GAMMA = Number(args.gamma || 0.99);
 const SAVE_DIR = String(args['save-dir'] || path.join(__dirname, 'policy_model'));
 const SEED = args.seed != null ? Number(args.seed) : null;
+const LEVEL_ARG = (args.level || '1'); // '1' | '2' | 'all'
+const MODE = String(args.mode || 'diagnostic').toLowerCase() === 'realistic' ? 'realistic' : 'diagnostic';
 
 // Hardware and TF backend selection (backend finalized inside main())
 const hw = detectHardware();
@@ -84,6 +86,11 @@ function makeObservation(sim) {
     ndy = by / Math.max(1, mch);
     nd = d / Math.max(1, Math.hypot(mcw, mch));
   }
+  // Level conditioning (one-hot up to 3 levels; clamp >3 to index 2)
+  const lv = Math.max(1, Math.floor(sim.level || 1));
+  const oneHot = [0,0,0];
+  oneHot[Math.min(2, lv-1)] = 1;
+
   const obs = [
     p.x / Math.max(1, mcw),
     p.y / Math.max(1, mch),
@@ -93,7 +100,7 @@ function makeObservation(sim) {
     rc / 12,
     sim.yrCanShoot ? 1 : 0,
     ndx, ndy, nd
-  ];
+  ].concat(oneHot);
   return obs;
 }
 
@@ -179,24 +186,74 @@ async function main() {
   } else {
     if (tf.ready) { try { await tf.ready(); } catch {} }
   }
-  console.log(`[train_rl] Using ${hw.tfpkg} backend=${tf.getBackend && tf.getBackend()} gpu=${hw.gpu} logicalCPUs=${hw.logicalCPUs} wasmThreads=${process.env.TFJS_NUM_THREADS || 'auto'}`);
+  console.log(`[train_rl] Using ${hw.tfpkg} backend=${tf.getBackend && tf.getBackend()} gpu=${hw.gpu} logicalCPUs=${hw.logicalCPUs} wasmThreads=${process.env.TFJS_NUM_THREADS || 'auto'} mode=${MODE}`);
   // Ensure save dir exists
   fs.mkdirSync(SAVE_DIR, { recursive: true });
+
+  // Enforce Realistic mode constraints (cannot start training at level>1 or use 'all')
+  if (MODE === 'realistic') {
+    if (!(LEVEL_ARG === '1' || LEVEL_ARG === 1)) {
+      console.error('[train_rl] Refusing to start: mode=realistic prohibits starting at level > 1. Use --level=1 or switch to --mode=diagnostic.');
+      process.exit(2);
+    }
+  }
 
   // World defaults
   const world = { width: 1024, height: 768, dpr: 1, clampPlayer: true, crosshairStart: { x: 200, y: 200 } };
 
   const dummySim = new SimGame();
-  dummySim.init({ world, seed: SEED != null ? SEED : 1234 });
+  dummySim.init({ world, seed: SEED != null ? SEED : 1234, level: 1 });
   const inputSize = makeObservation(dummySim).length;
   const policy = buildPolicy(inputSize);
 
   const optimizer = tf.train.adam(1e-3);
 
+  // Per-level metrics
+  const stats = new Map(); // level -> { ep:0, wins:0, losses:0, steps:0, returnSum:0 }
+  function addStats(level, win, steps, epReturn) {
+    const k = String(level);
+    if (!stats.has(k)) stats.set(k, { ep:0, wins:0, losses:0, steps:0, returnSum:0 });
+    const s = stats.get(k);
+    s.ep++; s.steps += steps; s.returnSum += epReturn; if (win) s.wins++; else s.losses++;
+  }
+
+  function pickLevel(epIndex) {
+    if (LEVEL_ARG === '1' || LEVEL_ARG === 1) return 1;
+    if (LEVEL_ARG === '2' || LEVEL_ARG === 2) return 2;
+    // 'all' curriculum: ramp Level 2 probability from 0.1 -> 0.6 across episodes
+    const t = Math.max(0, Math.min(1, epIndex / Math.max(1, EPISODES - 1)));
+    const p2 = 0.1 + 0.5 * t;
+    return (Math.random() < p2) ? 2 : 1;
+  }
+
+  // Record run metadata (sidecar) for traceability
+  try {
+    const meta = {
+      mode: MODE,
+      levelArg: String(LEVEL_ARG),
+      episodes: EPISODES,
+      maxSteps: MAX_STEPS,
+      gamma: GAMMA,
+      saveDir: path.resolve(SAVE_DIR),
+      seed: SEED,
+      hw: { backend: tf.getBackend && tf.getBackend(), gpu: hw.gpu, logicalCPUs: hw.logicalCPUs, wasmThreads: process.env.TFJS_NUM_THREADS || 'auto' },
+      startedAt: new Date().toISOString()
+    };
+    fs.writeFileSync(path.join(SAVE_DIR, 'training_run.json'), JSON.stringify(meta, null, 2));
+  } catch {}
+
   for (let ep = 0; ep < EPISODES; ep++) {
     const sim = new SimGame();
     const seed = SEED != null ? SEED + ep : Math.floor(Math.random() * 1e9);
-    sim.init({ world, seed });
+    const level = pickLevel(ep);
+    if (MODE === 'realistic' && level !== 1) {
+      // Safety: if curriculum or external changes try to pick >1 in realistic, clamp to 1
+      // (We enforce at entry, but keep this guard in case pickLevel changes in future.)
+      if (level !== 1) {
+        console.warn('[train_rl] mode=realistic forcing level=1');
+      }
+    }
+    sim.init({ world: { ...world, level }, seed, level });
 
     const obsBuf = [];
     const actBuf = [];
@@ -243,11 +300,13 @@ async function main() {
     }
 
     // Terminal bonus/penalty
+    let win = false;
     if (done) {
       const noEnemies = (sim.robots.length === 0);
       const playerDead = (sim.player.health <= 0);
       if (noEnemies) rewBuf[rewBuf.length - 1] += 10;
       if (playerDead) rewBuf[rewBuf.length - 1] -= 10;
+      win = !!noEnemies && !playerDead;
     }
 
     // Compute discounted returns
@@ -314,8 +373,18 @@ async function main() {
     });
 
     // Logging
-    const epReturn = rewBuf.reduce((a,b)=>a+b,0).toFixed(3);
-    console.log(`[train_rl] ep=${ep+1}/${EPISODES} steps=${steps} return=${epReturn}`);
+    const epReturn = rewBuf.reduce((a,b)=>a+b,0);
+    addStats(sim.level, win, steps, epReturn);
+    console.log(`[train_rl] ep=${ep+1}/${EPISODES} level=${sim.level} steps=${steps} return=${epReturn.toFixed(3)} outcome=${win?'win':'loss'}`);
+
+    // Periodic aggregated stats
+    if ((ep+1) % Math.max(1, Math.floor(EPISODES/5)) === 0 || ep === EPISODES - 1) {
+      for (const [k, s] of stats.entries()) {
+        const avgRet = s.returnSum / Math.max(1, s.ep);
+        const winRate = s.wins / Math.max(1, s.ep);
+        console.log(`[train_rl] agg level=${k} episodes=${s.ep} winRate=${winRate.toFixed(2)} avgReturn=${avgRet.toFixed(2)} avgSteps=${(s.steps/Math.max(1,s.ep)).toFixed(1)}`);
+      }
+    }
 
     // Save checkpoint occasionally and at end
     if ((ep + 1) % Math.max(1, Math.floor(EPISODES/5)) === 0 || ep === EPISODES - 1) {
