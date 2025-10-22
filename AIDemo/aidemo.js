@@ -333,6 +333,18 @@
             ledge.drawSelf(ctx, mcw, mch);
         }
 
+        // Lava (bottom hazard) visual overlay: draw over ledge blocks like Human HUD tint
+        // Matches damage threshold at y > mch - 1.5*yrm; solid red tint akin to Human HUD bar
+        {
+            const lavaHeight = Math.max(0, Math.min(mch, state.yrm * 1.5));
+            if (lavaHeight > 0) {
+                const gy = mch - lavaHeight;
+                // Use a semi-transparent red similar to Human's HUD bar (0.7, 0, 0, 0.7)
+                ctx.fillStyle = 'rgba(179,0,0,0.7)';
+                ctx.fillRect(0, gy, mcw, lavaHeight);
+            }
+        }
+
         // Player lasers
         ctx.lineWidth = 5;
         for (const L of state.lasers) {
