@@ -388,6 +388,98 @@
     let endOutcome = null;
     let endDrawn = false;
     let aiEnabled = false;
+    let policyModel = null;
+    let policyMode = 'heuristic'; // 'heuristic' | 'policy'
+
+    async function tryLoadPolicyModel() {
+        // Try to load a saved policy model from the server. If tfjs is not present, inject from CDN.
+        const modelUrl = '/NNet/policy_model/model.json';
+        try {
+            const r = await fetch(modelUrl, { cache: 'no-store' });
+            if (!r.ok) return false;
+        } catch { return false; }
+        // Ensure tfjs is loaded
+        if (typeof window.tf === 'undefined') {
+            await new Promise((resolve, reject) => {
+                const s = document.createElement('script');
+                s.src = 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js';
+                s.onload = resolve; s.onerror = reject; document.head.appendChild(s);
+            }).catch(() => {});
+        }
+        if (typeof window.tf === 'undefined') return false;
+        try {
+            policyModel = await window.tf.loadLayersModel(modelUrl);
+            return true;
+        } catch {
+            policyModel = null; return false;
+        }
+    }
+
+    function makeObservation() {
+        const mcw = canvas.width, mch = canvas.height;
+        const p = state.player;
+        // nearest robot vector
+        let ndx = 0, ndy = 0, nd = 1, rc = state.robots.length;
+        if (rc > 0) {
+            let best = Infinity, bx = 0, by = 0;
+            for (const r of state.robots) {
+                const dx = r.x - p.x, dy = r.y - p.y;
+                const d2 = dx*dx + dy*dy;
+                if (d2 < best) { best = d2; bx = dx; by = dy; }
+            }
+            const d = Math.sqrt(best) || 1;
+            ndx = bx / Math.max(1, mcw);
+            ndy = by / Math.max(1, mch);
+            nd = d / Math.max(1, Math.hypot(mcw, mch));
+        }
+        return [
+            p.x / Math.max(1, mcw),
+            p.y / Math.max(1, mch),
+            p.vx / Math.max(1, mch/20),
+            p.vy / Math.max(1, mch/20),
+            Math.max(0, Math.min(1, p.health)),
+            rc / 12,
+            state.yrCanShoot ? 1 : 0,
+            ndx, ndy, nd
+        ];
+    }
+
+    function applyAIAction(action) {
+        const f = state.frame;
+        // Key diffs vs current keysDown
+        const target = action.pressed;
+        const current = state.keysDown;
+        const allKeys = new Set([...target, ...current]);
+        for (const k of allKeys) {
+            const inTarget = target.has(k);
+            const inCurrent = current.has(k);
+            if (inTarget && !inCurrent) applyEvent({ type: 'keydown', payload: { key: k } });
+            else if (!inTarget && inCurrent) applyEvent({ type: 'keyup', payload: { key: k } });
+        }
+        // Aim: move crosshair by delta relative to player
+        const px = state.player.x + action.aim.dx;
+        const py = state.player.y + action.aim.dy;
+        applyEvent({ type: 'mousemove', payload: { x: px, y: py } });
+    }
+
+    function sampleFromPolicy(outArr, explore=0.05) {
+        // outArr: [7] from model; returns pressed keys and aim deltas
+        const keyLogits = outArr.slice(0,5);
+        const aimMeans = outArr.slice(5,7).map(v => Math.tanh(v));
+        const keys = ['a','d','w','s','f'];
+        const pressed = new Set();
+        for (let i = 0; i < 5; i++) {
+            const prob = 1 / (1 + Math.exp(-keyLogits[i]));
+            const p = Math.min(1, Math.max(0, prob * (1 - explore) + 0.5*explore));
+            if (Math.random() < p) pressed.add(keys[i]);
+        }
+        // Scale aim by a small step; allow mild noise for liveliness
+        const aimStd = 0.2 * explore;
+        const rn = () => (Math.random()*2 - 1) * aimStd;
+        const dx = (aimMeans[0] + rn()) * 20;
+        const dy = (aimMeans[1] + rn()) * 20;
+        return { pressed, aim: { dx, dy } };
+    }
 
     function stepReplay() {
         if (!recording) return;
@@ -463,26 +555,33 @@
 
     // Minimal AI to move the crosshair and trigger shots when no recording is provided
     function stepAI() {
-        const mcw = canvas.width, mch = canvas.height;
-        // Target the nearest robot to the player; if none, aim at center
-        let tx = mcw / 2, ty = mch / 2;
-        if (state.robots.length > 0) {
-            let bestIdx = -1, bestD2 = Infinity;
-            for (let i = 0; i < state.robots.length; i++) {
-                const r = state.robots[i];
-                const dx = r.x - state.player.x;
-                const dy = r.y - state.player.y;
-                const d2 = dx * dx + dy * dy;
-                if (d2 < bestD2) { bestD2 = d2; bestIdx = i; }
+        if (policyMode === 'policy' && policyModel && window.tf) {
+            const obs = makeObservation();
+            const out = window.tf.tidy(() => policyModel.predict(window.tf.tensor2d([obs])));
+            const arr = out.dataSync();
+            out.dispose();
+            const action = sampleFromPolicy(Array.from(arr), 0.05);
+            applyAIAction(action);
+        } else {
+            // Heuristic fallback: aim at nearest robot
+            const mcw = canvas.width, mch = canvas.height;
+            let tx = mcw / 2, ty = mch / 2;
+            if (state.robots.length > 0) {
+                let bestIdx = -1, bestD2 = Infinity;
+                for (let i = 0; i < state.robots.length; i++) {
+                    const r = state.robots[i];
+                    const dx = r.x - state.player.x;
+                    const dy = r.y - state.player.y;
+                    const d2 = dx * dx + dy * dy;
+                    if (d2 < bestD2) { bestD2 = d2; bestIdx = i; }
+                }
+                if (bestIdx >= 0) { tx = state.robots[bestIdx].x; ty = state.robots[bestIdx].y; }
             }
-            if (bestIdx >= 0) { tx = state.robots[bestIdx].x; ty = state.robots[bestIdx].y; }
+            const alpha = 0.35;
+            const newX = state.crosshair.x + (tx - state.crosshair.x) * alpha;
+            const newY = state.crosshair.y + (ty - state.crosshair.y) * alpha;
+            applyEvent({ type: 'mousemove', payload: { x: newX, y: newY } });
         }
-        // Ease crosshair toward target
-        const alpha = 0.35;
-        const newX = state.crosshair.x + (tx - state.crosshair.x) * alpha;
-        const newY = state.crosshair.y + (ty - state.crosshair.y) * alpha;
-        // Synthesize a mousemove event to reuse shooting logic
-        applyEvent({ type: 'mousemove', payload: { x: newX, y: newY } });
     }
 
     // Visual-only smoothing for crosshair to improve perceived realism without affecting gameplay
@@ -559,8 +658,15 @@
             );
         }
 
-        // Enable AI control of crosshair when no recording is provided
+        // Enable AI when no recording is provided
         aiEnabled = !recording;
+
+        // If AI is enabled, try loading a trained policy model in the background
+        if (aiEnabled) {
+            tryLoadPolicyModel().then((ok) => {
+                if (ok) { policyMode = 'policy'; setBanner('AI Demo (Policy)'); }
+            });
+        }
 
         // If AI is enabled (no recording), perform the canonical initial shot toward crosshairStart
         if (aiEnabled && state.yrCanShoot) {

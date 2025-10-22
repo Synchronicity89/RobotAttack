@@ -44,6 +44,8 @@ appendLog('aidemo-server.log', `START aidemo-server port=${PORT}`);
 
 // Strict static: only AI Demo pages and assets
 app.use('/AIDemo', express.static(aidemoDir));
+// Serve trained policy model artifacts for AI Demo (read-only)
+app.use('/NNet/policy_model', express.static(path.join(root, 'NNet', 'policy_model')));
 
 // Expose shared helper if referenced by AIDemo
 app.get('/humanLib.js', (_req, res) => res.sendFile(path.join(root, 'humanLib.js')));
