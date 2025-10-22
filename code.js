@@ -285,6 +285,13 @@ if (typeof window !== "undefined") {
     // Optional: dims if needed by tests
     window.mcw = mcw;
     window.mch = mch;
+    // Lightweight debug stats for boundary clamp behavior
+    window.__debugStats = {
+        topClampFrames: 0,
+        topClampUpwardVyFrames: 0,
+        maxTopClampStreak: 0,
+        _currTopClampStreak: 0
+    };
 }
 // Initial shot at frame 0 toward canonical crosshairStart
 {
@@ -398,8 +405,24 @@ function stepPhysics(){
 
     // Clamp player within screen if configured
     if (!world || world.clampPlayer !== false) {
-        yourRobot.x = Math.max(yrm/2, Math.min(mcw-yrm/2, yourRobot.x));
-        yourRobot.y = Math.max(yrm/2, Math.min(mch-yrm/2, yourRobot.y));
+        const half = yrm/2;
+        yourRobot.x = Math.max(half, Math.min(mcw-half, yourRobot.x));
+        yourRobot.y = Math.max(half, Math.min(mch-half, yourRobot.y));
+        // Debug-only measurement: count frames clamped at the top boundary
+        try {
+            const ds = (typeof window !== 'undefined') ? window.__debugStats : null;
+            if (ds) {
+                const atTopClamp = (yourRobot.y <= half + 1e-6);
+                if (atTopClamp) {
+                    ds.topClampFrames++;
+                    if (yourRobot.velY < 0) ds.topClampUpwardVyFrames++;
+                    ds._currTopClampStreak++;
+                } else if (ds._currTopClampStreak > 0) {
+                    ds.maxTopClampStreak = Math.max(ds.maxTopClampStreak, ds._currTopClampStreak);
+                    ds._currTopClampStreak = 0;
+                }
+            }
+        } catch {}
     }
 
     // Player lasers: advance and safe-remove (backward)
@@ -538,9 +561,12 @@ document.addEventListener("keyup", keyUpEvent);
 function mcanMousemove(event){
     if (yrCanShoot && !gameOver) {
         let pt = { x: event.clientX ?? event.x, y: event.clientY ?? event.y };
-        if (typeof HumanLib !== "undefined" && HumanLib.mapMouseToCanvas) {
-            pt = HumanLib.mapMouseToCanvas(event, mcan);
-        }
+        try {
+            if (typeof HumanLib !== "undefined" && typeof HumanLib.mapMouseToCanvas === 'function') {
+                const mapped = HumanLib.mapMouseToCanvas(event, mcan);
+                if (mapped && Number.isFinite(mapped.x) && Number.isFinite(mapped.y)) pt = mapped;
+            }
+        } catch {}
         let laser = new Laser(yourRobot.idCounter, yourRobot, true, pt.x, pt.y);
         yourRobot.lasers.push(laser);
         yourRobot.idCounter ++;

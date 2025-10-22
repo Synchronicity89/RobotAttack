@@ -15,6 +15,7 @@
     "sim:assert-latest": "node Sim/run-sim.js --latest --assert",
     "sim:log": "cat logs/sim-run-latest.log || true",
     "sim:tail": "tail -f logs/sim-run-latest.log || true",
+    "sim:measure:hover": "node Sim/measure_top_hover.js --trials=5 --frames=180",
     "train:rl": "node NNet/train_rl.js --episodes=10 --max-steps=800"
   },
   "dependencies": {
