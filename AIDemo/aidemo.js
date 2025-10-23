@@ -72,6 +72,25 @@
 
     // Seedable RNG and helpers for ledges
     let rand = Math.random;
+    // Policy sampling knobs (URL-overridable):
+    //   ?ai_explore=0..1, ?ai_step=px, ?ai_min_step=px, ?ai_jerk_prob=0..1
+    (function initPolicyKnobs(){
+        try {
+            const sp = new URLSearchParams(window.location.search);
+            const EXP = parseFloat(sp.get('ai_explore'));
+            const STEP = parseFloat(sp.get('ai_step'));
+            const MINSTEP = parseFloat(sp.get('ai_min_step'));
+            const JERK = parseFloat(sp.get('ai_jerk_prob'));
+            window.__policyKnobs = {
+                explore: (Number.isFinite(EXP) ? Math.max(0, Math.min(1, EXP)) : 0.6),
+                stepPx: (Number.isFinite(STEP) && STEP > 0 ? STEP : 40),
+                minStepPx: (Number.isFinite(MINSTEP) && MINSTEP >= 0 ? MINSTEP : 12),
+                jerkProb: (Number.isFinite(JERK) ? Math.max(0, Math.min(1, JERK)) : 0.35)
+            };
+        } catch {
+            window.__policyKnobs = { explore: 0.6, stepPx: 40, minStepPx: 12, jerkProb: 0.35 };
+        }
+    })();
     function randomBetween(min, max, precision) {
         return Math.floor((rand() * (max - min) + min) / precision) * precision;
     }
@@ -91,6 +110,11 @@
             this.y = randomBetween(0.1, 0.9, 0.01);
             this.x = randomBetween(0.1, 0.9, 0.01);
             this.w = randomBetween(1 / 16, 1 / 4, 0.01);
+            // Level 2+: motion params (sinusoid). Defaults keep Level 1 static.
+            this.baseY = this.y;
+            this.amp = 0;
+            this.omega = 0;
+            this.phase = rand() * Math.PI * 2;
         }
         drawSelf(ctx, cw, ch) {
             // Shade based on id to create depth
@@ -142,7 +166,8 @@
             x: 0, y: 0, vx: 0, vy: 0, atBottom: false, health: 1, idCounter: 0
         },
         lasers: [],
-        robots: [] // added: demo robots for visuals
+        robots: [], // added: demo robots for visuals
+        mothership: null
     };
     // expose for tests
     if (typeof window !== 'undefined') window.demoState = state;
@@ -249,6 +274,48 @@
 
     let demoFalling = true;
 
+    // Level 2: Mothership and missiles (AI Demo)
+    class Mothership {
+        constructor(mcw, mch, mcm, velChange) {
+            this.health = 10;
+            this.w = Math.max(mcm/10, (mcm/20)*6);
+            this.h = Math.max(mcm/14, (mcm/20)*4);
+            this.x = mcw/2;
+            this.y = mch*0.2;
+            this.velX = Math.max(velChange * 0.5, 0.5);
+            this.missiles = [];
+            this.idCounter = 0;
+            this.firePeriod = 180;
+        }
+        update(player, mcw, mch, velChange) {
+            this.x += this.velX;
+            if (this.x < this.w/2 || this.x > mcw - this.w/2) this.velX *= -1;
+            if (state.timer % this.firePeriod === 0) {
+                const ang = Math.atan2(player.y - this.y, player.x - this.x);
+                this.missiles.push({ id: this.idCounter++, x: this.x, y: this.y, angle: ang, speed: Math.max(velChange*2, 2), r: Math.max(state.yrm/6, 4) });
+            }
+            for (let i = this.missiles.length - 1; i >= 0; i--) {
+                const m = this.missiles[i];
+                m.x += Math.cos(m.angle) * m.speed;
+                m.y += Math.sin(m.angle) * m.speed;
+                if (m.x < 0 || m.x > mcw || m.y < 0 || m.y > mch) this.missiles.splice(i, 1);
+            }
+        }
+        draw(ctx) {
+            ctx.fillStyle = 'rgba(179,26,179,1)';
+            ctx.fillRect(this.x - this.w/2, this.y - this.h/2, this.w, this.h);
+            // Health bar
+            ctx.fillStyle = 'rgba(230,51,230,1)';
+            const hw = this.w * (Math.max(this.health, 0) / 10);
+            ctx.fillRect(this.x - this.w/2, this.y - this.h/2 - Math.max(2, state.yrm/8), hw, Math.max(2, state.yrm/8));
+            // Missiles
+            ctx.fillStyle = 'rgba(255,77,26,1)';
+            for (const m of this.missiles) {
+                ctx.beginPath(); ctx.arc(m.x, m.y, m.r, 0, Math.PI*2); ctx.fill();
+            }
+        }
+    }
+
     function stepPhysics() {
         const mcw = canvas.width, mch = canvas.height;
         const held = (k) => state.keysDown.has(k);
@@ -272,6 +339,15 @@
         state.player.y += state.player.vy;
 
         // Sticky ledges and ground snap (match Human logic shape)
+        // Level 2+: update ledge vertical motion before collision
+        if ((state.level || 1) >= 2) {
+            for (const L of ledgeOrder) {
+                if (L.amp && L.omega) {
+                    const yRaw = L.baseY + L.amp * Math.sin((state.timer + L.phase) * L.omega);
+                    L.y = yRaw;
+                }
+            }
+        }
         let falling = true;
         for (const ledge of ledgeOrder) {
             if (state.player.y + state.yrm / 2 > ledge.y * mch - state.player.vy - 1) {
@@ -323,7 +399,7 @@
             if (L.x < 0 || L.x > mcw || L.y < 0 || L.y > mch) state.lasers.splice(i, 1);
         }
 
-        // Player lasers vs enemies (nearest-to-origin AABB policy)
+    // Player lasers vs enemies (nearest-to-origin AABB policy)
         if (state.robots.length > 0) {
             // find nearest by origin (x^2 + y^2), not nearest to laser
             let nearestIdx = -1, nearestVal = Infinity;
@@ -341,6 +417,19 @@
                         state.lasers.splice(i, 1);
                         nr.health -= 0.2;
                     }
+                }
+            }
+        }
+
+        // Level 2+: player lasers can also hit mothership
+        if (state.mothership && state.mothership.health > 0) {
+            const ms = state.mothership;
+            for (let i = state.lasers.length - 1; i >= 0; i--) {
+                const L = state.lasers[i];
+                if (L.x > ms.x - ms.w/2 && L.x < ms.x + ms.w/2 &&
+                    L.y > ms.y - ms.h/2 && L.y < ms.y + ms.h/2) {
+                    state.lasers.splice(i, 1);
+                    ms.health -= 0.2;
                 }
             }
         }
@@ -367,6 +456,19 @@
                 if (L.x < 0 || L.x > mcw || L.y < 0 || L.y > mch) rb.lasers.splice(j, 1);
             }
             if (rb.health < 0) state.robots.splice(i, 1);
+        }
+
+        // Level 2: update mothership and handle missile collisions vs player
+        if (state.mothership && state.mothership.health > 0) {
+            state.mothership.update(state.player, mcw, mch, state.velChange);
+            for (let i = state.mothership.missiles.length - 1; i >= 0; i--) {
+                const m = state.mothership.missiles[i];
+                if (m.x > state.player.x - state.yrm/2 && m.x < state.player.x + state.yrm/2 &&
+                    m.y > state.player.y - state.yrm/2 && m.y < state.player.y + state.yrm/2) {
+                    state.mothership.missiles.splice(i, 1);
+                    state.player.health -= 0.05; // reduced to 25% damage
+                }
+            }
         }
 
         // Environment and regen (mirror Human)
@@ -413,6 +515,11 @@
         // Robots (also draws enemy lasers)
         for (const rb of state.robots) {
             rb.draw(ctx, state.yrm);
+        }
+
+        // Level 2: mothership (draw after robots to layer above)
+        if (state.mothership && state.mothership.health > 0) {
+            state.mothership.draw(ctx);
         }
 
         // Player
@@ -491,6 +598,17 @@
         }
     }
 
+    // Observation precision config: default ~2 decimal digits
+    function getObsDigits() {
+        const sp = new URLSearchParams(window.location.search);
+        const d = Number(sp.get('obsDigits'));
+        return Number.isFinite(d) ? Math.max(0, Math.floor(d)) : 2;
+    }
+    function qf(val) {
+        const k = Math.pow(10, getObsDigits());
+        return Math.round(val * k) / k;
+    }
+
     function makeObservation() {
         const mcw = canvas.width, mch = canvas.height;
         const p = state.player;
@@ -504,19 +622,76 @@
                 if (d2 < best) { best = d2; bx = dx; by = dy; }
             }
             const d = Math.sqrt(best) || 1;
-            ndx = bx / Math.max(1, mcw);
-            ndy = by / Math.max(1, mch);
-            nd = d / Math.max(1, Math.hypot(mcw, mch));
+            ndx = qf(bx / Math.max(1, mcw));
+            ndy = qf(by / Math.max(1, mch));
+            nd = qf(d / Math.max(1, Math.hypot(mcw, mch)));
         }
+        const robotsCountNorm = qf(rc / 12);
+
+        // Mothership features
+        let msPresent = 0, msDx = 0, msDy = 0, msHealth = 0;
+        if (state.mothership && state.mothership.health > 0) {
+            msPresent = 1;
+            msDx = qf((state.mothership.x - p.x) / Math.max(1, mcw));
+            msDy = qf((state.mothership.y - p.y) / Math.max(1, mch));
+            msHealth = qf(Math.max(0, Math.min(1, state.mothership.health / 10)));
+        }
+
+        // Ledge perception
+        let belowDist = 0, aboveDist = 0, movingPresent = 0;
+        if (ledgeOrder && ledgeOrder.length) {
+            let bestBelow = Infinity, bestAbove = Infinity;
+            for (const L of ledgeOrder) {
+                if (L && typeof L.amp === 'number' && L.amp > 0) movingPresent = 1;
+                const ypx = L.y * mch;
+                if (ypx >= p.y) { const d = ypx - p.y; if (d < bestBelow) bestBelow = d; }
+                else { const d = p.y - ypx; if (d < bestAbove) bestAbove = d; }
+            }
+            belowDist = qf(bestBelow < Infinity ? bestBelow / Math.max(1, mch) : 0);
+            aboveDist = qf(bestAbove < Infinity ? bestAbove / Math.max(1, mch) : 0);
+        }
+
+        // Projectiles
+        let nearestPDx = 0, nearestPDy = 0, nearestPSpeed = 0, isMissile = 0;
+        let lasersCount = 0, missilesCount = 0;
+        for (const rb of state.robots) lasersCount += (rb.lasers ? rb.lasers.length : 0);
+        if (state.mothership && Array.isArray(state.mothership.missiles)) missilesCount = state.mothership.missiles.length;
+        let bestP = Infinity, bestObj = null, bestType = 'laser';
+        for (const rb of state.robots) {
+            for (const L of (rb.lasers || [])) {
+                const dx = L.x - p.x, dy = L.y - p.y; const d2 = dx*dx + dy*dy;
+                if (d2 < bestP) { bestP = d2; bestObj = { dx, dy, speed: rb.speed }; bestType = 'laser'; }
+            }
+        }
+        if (state.mothership) {
+            for (const m of (state.mothership.missiles || [])) {
+                const dx = m.x - p.x, dy = m.y - p.y; const d2 = dx*dx + dy*dy;
+                if (d2 < bestP) { bestP = d2; bestObj = { dx, dy, speed: m.speed }; bestType = 'missile'; }
+            }
+        }
+        if (bestObj) {
+            nearestPDx = qf(bestObj.dx / Math.max(1, mcw));
+            nearestPDy = qf(bestObj.dy / Math.max(1, mch));
+            const scale = Math.max(1, mch / 324 * 10);
+            nearestPSpeed = qf(bestObj.speed / scale);
+            isMissile = (bestType === 'missile') ? 1 : 0;
+        }
+        const lasersCountNorm = qf(Math.min(1, lasersCount / 20));
+        const missilesCountNorm = qf(Math.min(1, missilesCount / 10));
+
         const base = [
-            p.x / Math.max(1, mcw),
-            p.y / Math.max(1, mch),
-            p.vx / Math.max(1, mch/20),
-            p.vy / Math.max(1, mch/20),
-            Math.max(0, Math.min(1, p.health)),
-            rc / 12,
+            qf(p.x / Math.max(1, mcw)),
+            qf(p.y / Math.max(1, mch)),
+            qf(p.vx / Math.max(1, mch/20)),
+            qf(p.vy / Math.max(1, mch/20)),
+            qf(Math.max(0, Math.min(1, p.health))),
+            robotsCountNorm,
             state.yrCanShoot ? 1 : 0,
-            ndx, ndy, nd
+            ndx, ndy, nd,
+            msPresent, msDx, msDy, msHealth,
+            belowDist, aboveDist, movingPresent,
+            nearestPDx, nearestPDy, nearestPSpeed, isMissile,
+            lasersCountNorm, missilesCountNorm
         ];
         // Append level one-hot like trainer: [L1, L2, L3+]
         const lv = Math.max(1, Math.floor(state.level || 1));
@@ -537,28 +712,47 @@
             if (inTarget && !inCurrent) applyEvent({ type: 'keydown', payload: { key: k } });
             else if (!inTarget && inCurrent) applyEvent({ type: 'keyup', payload: { key: k } });
         }
-        // Aim: move crosshair by delta relative to player
-        const px = state.player.x + action.aim.dx;
-        const py = state.player.y + action.aim.dy;
+        // Aim: move crosshair by delta relative to its current position (not the player)
+        const mcw = canvas.width, mch = canvas.height;
+        const px = Math.max(0, Math.min(mcw, state.crosshair.x + (action.aim.dx || 0)));
+        const py = Math.max(0, Math.min(mch, state.crosshair.y + (action.aim.dy || 0)));
         applyEvent({ type: 'mousemove', payload: { x: px, y: py } });
     }
 
-    function sampleFromPolicy(outArr, explore=0.05) {
+    function sampleFromPolicy(outArr) {
         // outArr: [7] from model; returns pressed keys and aim deltas
+        const knobs = (typeof window !== 'undefined' && window.__policyKnobs) ? window.__policyKnobs : { explore: 0.6, stepPx: 40, minStepPx: 12, jerkProb: 0.35 };
         const keyLogits = outArr.slice(0,5);
         const aimMeans = outArr.slice(5,7).map(v => Math.tanh(v));
         const keys = ['a','d','w','s','f'];
         const pressed = new Set();
         for (let i = 0; i < 5; i++) {
             const prob = 1 / (1 + Math.exp(-keyLogits[i]));
-            const p = Math.min(1, Math.max(0, prob * (1 - explore) + 0.5*explore));
+            const p = Math.min(1, Math.max(0, prob * (1 - knobs.explore) + 0.5*knobs.explore));
             if (Math.random() < p) pressed.add(keys[i]);
         }
-        // Scale aim by a small step; allow mild noise for liveliness
-        const aimStd = 0.2 * explore;
-        const rn = () => (Math.random()*2 - 1) * aimStd;
-        const dx = (aimMeans[0] + rn()) * 20;
-        const dy = (aimMeans[1] + rn()) * 20;
+        // Aim sampling: high noise + larger steps + min magnitude + optional jerks
+        const step = knobs.stepPx;
+        const noiseAmp = knobs.explore * step;
+        let dx = (aimMeans[0] * step) + ((Math.random()*2 - 1) * noiseAmp);
+        let dy = (aimMeans[1] * step) + ((Math.random()*2 - 1) * noiseAmp);
+        if (knobs.jerkProb > 0 && Math.random() < knobs.jerkProb) {
+            const th = Math.random() * Math.PI * 2;
+            const jm = knobs.minStepPx + Math.random() * Math.max(0, step - knobs.minStepPx);
+            dx += Math.cos(th) * jm;
+            dy += Math.sin(th) * jm;
+        }
+        const mag = Math.hypot(dx, dy);
+        if (mag < knobs.minStepPx) {
+            if (mag < 1e-6) {
+                const th = Math.random() * Math.PI * 2;
+                dx = Math.cos(th) * knobs.minStepPx;
+                dy = Math.sin(th) * knobs.minStepPx;
+            } else {
+                const s = knobs.minStepPx / mag;
+                dx *= s; dy *= s;
+            }
+        }
         return { pressed, aim: { dx, dy } };
     }
 
@@ -575,8 +769,8 @@
         if (finished) return;
         finished = true;
 
-        // Compute outcome from current state (prefer real-time over recording)
-        const noEnemies = (state.robots.length === 0);
+    // Compute outcome from current state (prefer real-time over recording)
+    const noEnemies = (state.robots.length === 0) && (!state.mothership || state.mothership.health <= 0);
         const playerDead = (state.player.health <= 0);
         const drawn = noEnemies && playerDead;
         const computedOutcome = noEnemies ? 'win' : (playerDead ? 'loss' : 'replay');
@@ -626,7 +820,7 @@
         drawFrame();
 
         // Early stop if real-time outcome reached; else use stopFrame upper bound
-        const noEnemies = (state.robots.length === 0);
+        const noEnemies = (state.robots.length === 0) && (!state.mothership || state.mothership.health <= 0);
         const playerDead = (state.player.health <= 0);
         if (noEnemies || playerDead || state.frame >= stopFrame) {
             postTelemetryAndStop();
@@ -640,16 +834,32 @@
     function stepAI() {
         if (policyMode === 'policy' && policyModel && window.tf) {
             const obs = makeObservation();
-            const out = window.tf.tidy(() => policyModel.predict(window.tf.tensor2d([obs])));
+            // Align observation length to model's expected input size by padding/truncating
+            let inSize = null;
+            try { const shape = policyModel.inputs && policyModel.inputs[0] && policyModel.inputs[0].shape; inSize = (shape && shape[1]) || null; } catch {}
+            let obsAligned = obs;
+            if (Number.isFinite(inSize) && inSize > 0) {
+                if (obs.length < inSize) {
+                    const pad = new Array(inSize - obs.length).fill(0);
+                    obsAligned = obs.concat(pad);
+                } else if (obs.length > inSize) {
+                    obsAligned = obs.slice(0, inSize);
+                }
+            }
+            const out = window.tf.tidy(() => policyModel.predict(window.tf.tensor2d([obsAligned])));
             const arr = out.dataSync();
             out.dispose();
             const action = sampleFromPolicy(Array.from(arr), 0.05);
             applyAIAction(action);
         } else {
-            // Heuristic fallback: aim at nearest robot
+            // Heuristic fallback:
+            // - If mothership is present, aim at its center.
+            // - Else, aim at nearest robot.
             const mcw = canvas.width, mch = canvas.height;
             let tx = mcw / 2, ty = mch / 2;
-            if (state.robots.length > 0) {
+            if (state.mothership && state.mothership.health > 0) {
+                tx = state.mothership.x; ty = state.mothership.y;
+            } else if (state.robots.length > 0) {
                 let bestIdx = -1, bestD2 = Infinity;
                 for (let i = 0; i < state.robots.length; i++) {
                     const r = state.robots[i];
@@ -723,6 +933,11 @@
                     if (ledges[i].y < highest.y) { highest.item = i; highest.y = ledges[i].y; }
                 }
                 ledges[highest.item].id = ledgeOrder.length;
+                if ((state.level || 1) >= 2) {
+                    ledges[highest.item].baseY = ledges[highest.item].y;
+                    ledges[highest.item].amp = randomBetween(0.05, 0.25, 0.01);
+                    ledges[highest.item].omega = randomBetween(0.002, 0.01, 0.001);
+                }
                 ledgeOrder.push(ledges[highest.item]);
                 ledges.splice(highest.item, 1);
             }
@@ -736,6 +951,12 @@
             for (let i = 0; i < 12; i++) {
                 state.robots.push(new Robot(i, mcw, mch, mcm, state.velChange));
             }
+        }
+
+        // Level 2: create mothership
+        if ((state.level || 1) >= 2) {
+            const mcw = canvas.width, mch = canvas.height, mcm = Math.min(mcw, mch);
+            state.mothership = new Mothership(mcw, mch, mcm, state.velChange);
         }
 
         // Compute a conservative stop frame: prefer recording.frames; else last input + margin

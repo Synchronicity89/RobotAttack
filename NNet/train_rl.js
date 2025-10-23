@@ -21,6 +21,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { SimGame } = require('../Sim/sim.js');
+const TU = require('./train_utils');
 const { detectHardware } = require('./hardware');
 
 function parseArgs() {
@@ -37,12 +38,27 @@ function parseArgs() {
 
 const args = parseArgs();
 const EPISODES = Number(args.episodes || 10);
-const MAX_STEPS = Number(args['max-steps'] || 1200);
+// Default horizon set a bit higher to allow Level 2 robots to decay below 0
+const MAX_STEPS = Number(args['max-steps'] || 1800);
 const GAMMA = Number(args.gamma || 0.99);
 const SAVE_DIR = String(args['save-dir'] || path.join(__dirname, 'policy_model'));
 const SEED = args.seed != null ? Number(args.seed) : null;
 const LEVEL_ARG = (args.level || '1'); // '1' | '2' | 'all'
 const MODE = String(args.mode || 'diagnostic').toLowerCase() === 'realistic' ? 'realistic' : 'diagnostic';
+// Observation precision config (quantize to ~two decimal digits by default)
+const OBS_DIGITS = Number(args['obs-digits'] != null ? args['obs-digits'] : 2);
+const OBS_BITS = Number(args['obs-bits'] != null ? args['obs-bits'] : NaN);
+function quantizeFloat(val) {
+  // Prefer decimal digits if provided, else approximate from bits
+  const digits = Number.isFinite(OBS_DIGITS) ? Math.max(0, Math.floor(OBS_DIGITS)) : 2;
+  const k = Math.pow(10, digits);
+  return Math.round(val * k) / k;
+}
+// Versioning for training compatibility: Major.Minor.Revision (bump minor on input schema changes)
+const TRAINING_VERSION = { major: 1, minor: 1, revision: 0 };
+const TRAINING_VERSION_STR = `${TRAINING_VERSION.major}.${TRAINING_VERSION.minor}.${TRAINING_VERSION.revision}`;
+// Diagnostics logging controls
+const LOG_SHAPING = (args['log-shaping'] == null) ? true : String(args['log-shaping']).toLowerCase() !== 'false';
 
 // Hardware and TF backend selection (backend finalized inside main())
 const hw = detectHardware();
@@ -67,6 +83,29 @@ function buildPolicy(inputSize) {
   return model;
 }
 
+// Try to load an existing model if training_meta.json exists and Major.Minor match
+async function tryLoadExistingModel(tf, dir) {
+  try {
+    const metaPath = path.join(dir, 'training_meta.json');
+    const modelJsonPath = path.join(dir, 'model.json');
+    const weightsPath = path.join(dir, 'weights.bin');
+    if (!fs.existsSync(metaPath) || !fs.existsSync(modelJsonPath) || !fs.existsSync(weightsPath)) return null;
+    const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+    const v = meta && meta.version;
+    if (!v || v.major !== TRAINING_VERSION.major || v.minor !== TRAINING_VERSION.minor) return null;
+    const mjson = JSON.parse(fs.readFileSync(modelJsonPath, 'utf8'));
+    const wspec = (mjson.weightsManifest && mjson.weightsManifest[0] && mjson.weightsManifest[0].weights) || [];
+    const wdata = fs.readFileSync(weightsPath);
+    const handler = tf.io.fromMemory(mjson.modelTopology, wspec, wdata);
+    const loaded = await tf.loadLayersModel(handler);
+    console.log(`[train_rl] Loaded existing compatible model (v${v.major}.${v.minor}.${v.revision || 0}) from ${path.resolve(dir)}`);
+    return loaded;
+  } catch (e) {
+    console.warn('[train_rl] Failed to load existing model:', e.message);
+    return null;
+  }
+}
+
 // Observation builder
 function makeObservation(sim) {
   const mcw = sim.world.width, mch = sim.world.height;
@@ -82,26 +121,89 @@ function makeObservation(sim) {
       if (d2 < best) { best = d2; bx = dx; by = dy; }
     }
     const d = Math.sqrt(best) || 1;
-    ndx = bx / Math.max(1, mcw);
-    ndy = by / Math.max(1, mch);
-    nd = d / Math.max(1, Math.hypot(mcw, mch));
+    ndx = quantizeFloat(bx / Math.max(1, mcw));
+    ndy = quantizeFloat(by / Math.max(1, mch));
+    nd = quantizeFloat(d / Math.max(1, Math.hypot(mcw, mch)));
   }
+  const robotsCountNorm = quantizeFloat(rc / 12);
+
+  // Mothership features
+  let msPresent = 0, msDx = 0, msDy = 0, msHealth = 0;
+  if (sim.mothership && sim.mothership.health > 0) {
+    msPresent = 1;
+    msDx = quantizeFloat((sim.mothership.x - p.x) / Math.max(1, mcw));
+    msDy = quantizeFloat((sim.mothership.y - p.y) / Math.max(1, mch));
+    msHealth = quantizeFloat(Math.max(0, Math.min(1, sim.mothership.health / 10)));
+  }
+
+  // Ledge perception: nearest below/above distances and moving-ledges presence
+  let belowDist = 0, aboveDist = 0, movingPresent = 0;
+  if (sim.ledgeOrder && sim.ledgeOrder.length) {
+    let bestBelow = Infinity, bestAbove = Infinity;
+    for (const L of sim.ledgeOrder) {
+      if (L && typeof L.amp === 'number' && L.amp > 0) movingPresent = 1;
+      const ypx = L.y * mch;
+      if (ypx >= p.y) {
+        const d = ypx - p.y; if (d < bestBelow) bestBelow = d;
+      } else {
+        const d = p.y - ypx; if (d < bestAbove) bestAbove = d;
+      }
+    }
+    belowDist = quantizeFloat(bestBelow < Infinity ? bestBelow / Math.max(1, mch) : 0);
+    aboveDist = quantizeFloat(bestAbove < Infinity ? bestAbove / Math.max(1, mch) : 0);
+  }
+
+  // Projectiles (enemy lasers + missiles): nearest-to-player and counts
+  let nearestPDx = 0, nearestPDy = 0, nearestPSpeed = 0, isMissile = 0;
+  let lasersCount = 0, missilesCount = 0;
+  // Collect lasers from robots
+  for (const rb of robots) lasersCount += (rb.lasers ? rb.lasers.length : 0);
+  // Missiles
+  if (sim.mothership && Array.isArray(sim.mothership.missiles)) missilesCount = sim.mothership.missiles.length;
+  // Find nearest projectile
+  let bestP = Infinity, bestObj = null, bestType = 'laser';
+  for (const rb of robots) {
+    for (const L of (rb.lasers || [])) {
+      const dx = L.x - p.x, dy = L.y - p.y; const d2 = dx*dx + dy*dy;
+      if (d2 < bestP) { bestP = d2; bestObj = { dx, dy, speed: rb.speed }; bestType = 'laser'; }
+    }
+  }
+  if (sim.mothership) {
+    for (const m of (sim.mothership.missiles || [])) {
+      const dx = m.x - p.x, dy = m.y - p.y; const d2 = dx*dx + dy*dy;
+      if (d2 < bestP) { bestP = d2; bestObj = { dx, dy, speed: m.speed }; bestType = 'missile'; }
+    }
+  }
+  if (bestObj) {
+    nearestPDx = quantizeFloat(bestObj.dx / Math.max(1, mcw));
+    nearestPDy = quantizeFloat(bestObj.dy / Math.max(1, mch));
+    // Normalize speed against a rough scale: velChange * 10 (~player laser speed is fixed 10)
+    const scale = Math.max(1, mch / 324 * 10);
+    nearestPSpeed = quantizeFloat(bestObj.speed / scale);
+    isMissile = (bestType === 'missile') ? 1 : 0;
+  }
+  const lasersCountNorm = quantizeFloat(Math.min(1, lasersCount / 20));
+  const missilesCountNorm = quantizeFloat(Math.min(1, missilesCount / 10));
   // Level conditioning (one-hot up to 3 levels; clamp >3 to index 2)
   const lv = Math.max(1, Math.floor(sim.level || 1));
   const oneHot = [0,0,0];
   oneHot[Math.min(2, lv-1)] = 1;
 
-  const obs = [
-    p.x / Math.max(1, mcw),
-    p.y / Math.max(1, mch),
-    p.vx / Math.max(1, mch/20),
-    p.vy / Math.max(1, mch/20),
-    Math.max(0, Math.min(1, p.health)),
-    rc / 12,
+  const base = [
+    quantizeFloat(p.x / Math.max(1, mcw)),
+    quantizeFloat(p.y / Math.max(1, mch)),
+    quantizeFloat(p.vx / Math.max(1, mch/20)),
+    quantizeFloat(p.vy / Math.max(1, mch/20)),
+    quantizeFloat(Math.max(0, Math.min(1, p.health))),
+    robotsCountNorm,
     sim.yrCanShoot ? 1 : 0,
-    ndx, ndy, nd
-  ].concat(oneHot);
-  return obs;
+    ndx, ndy, nd,
+    msPresent, msDx, msDy, msHealth,
+    belowDist, aboveDist, movingPresent,
+    nearestPDx, nearestPDy, nearestPSpeed, isMissile,
+    lasersCountNorm, missilesCountNorm
+  ];
+  return base.concat(oneHot);
 }
 
 // Action sampling from policy outputs and exploration noise
@@ -160,11 +262,20 @@ function applyAction(sim, action) {
     }
   }
 
-  // Aim: move crosshair by delta relative to player position (absolute coords in mousemove)
-  const px = sim.player.x + action.aim.dx;
-  const py = sim.player.y + action.aim.dy;
+  // Aim: accumulate a virtual cursor relative to its previous position (not the player)
+  // This mirrors how a human moves the mouse and lets the crosshair travel across the field.
+  // Initialize cursor to crosshairStart or screen center on first use.
+  if (!sim.trainCursor) {
+    const cs = (sim.world && sim.world.crosshairStart) ? sim.world.crosshairStart : { x: 200, y: 200 };
+    sim.trainCursor = { x: Math.max(0, Math.min(sim.world.width, cs.x)), y: Math.max(0, Math.min(sim.world.height, cs.y)) };
+  }
+  const nx = sim.trainCursor.x + (action.aim.dx || 0);
+  const ny = sim.trainCursor.y + (action.aim.dy || 0);
+  // Clamp to world bounds
+  sim.trainCursor.x = Math.max(0, Math.min(sim.world.width, nx));
+  sim.trainCursor.y = Math.max(0, Math.min(sim.world.height, ny));
   if (!sim.inputByFrame.has(f)) sim.inputByFrame.set(f, []);
-  sim.inputByFrame.get(f).push({ type: 'mousemove', payload: { x: px, y: py } });
+  sim.inputByFrame.get(f).push({ type: 'mousemove', payload: { x: sim.trainCursor.x, y: sim.trainCursor.y } });
 }
 
 // Reward shaping
@@ -178,6 +289,36 @@ function computeReward(prev, sim) {
   if (dRobots > 0) r += dRobots * 1.0;
   return r;
 }
+
+// (Removed) Auxiliary hint loss toward mothership: intentionally disabled to avoid biasing training
+
+// Experimental punishment when crosshair target is too close to the player (discourage self-aiming)
+// Enable with --punish-near-aim (boolean or numeric weight). Optional radius via --punish-near-aim-radius
+const PUNISH_NEAR_AIM = (function() {
+  if (!('punish-near-aim' in args)) return 0;
+  if (args['punish-near-aim'] === true) return 0.05; // default weight when used as a switch
+  const v = Number(args['punish-near-aim']);
+  return Number.isFinite(v) ? v : 0.05;
+})();
+const PUNISH_NEAR_AIM_RADIUS = (function() {
+  if (!('punish-near-aim-radius' in args)) return 0.05; // 5% of screen diagonal
+  if (args['punish-near-aim-radius'] === true) return 0.05;
+  const v = Number(args['punish-near-aim-radius']);
+  return Number.isFinite(v) ? v : 0.05;
+})();
+
+// Reward shaping: encourage aiming toward the mothership direction
+// Enable with --reward-aim-ms=<weight> (e.g., 0.1). Optional min step via --reward-aim-ms-minstep (fraction of diag)
+const REWARD_AIM_MS = (function(){
+  if (!('reward-aim-ms' in args)) return 0;
+  const v = Number(args['reward-aim-ms']);
+  return Number.isFinite(v) ? v : 0;
+})();
+const REWARD_AIM_MS_MINSTEP = (function(){
+  if (!('reward-aim-ms-minstep' in args)) return 0.01; // at least 1% of diagonal to count fully
+  const v = Number(args['reward-aim-ms-minstep']);
+  return Number.isFinite(v) ? v : 0.01;
+})();
 
 async function main() {
   // Finalize backend selection before any tf ops
@@ -204,7 +345,10 @@ async function main() {
   const dummySim = new SimGame();
   dummySim.init({ world, seed: SEED != null ? SEED : 1234, level: 1 });
   const inputSize = makeObservation(dummySim).length;
-  const policy = buildPolicy(inputSize);
+  let policy = buildPolicy(inputSize);
+  // Default behavior: if a compatible model exists, resume training from it
+  const maybeLoaded = await tryLoadExistingModel(tf, SAVE_DIR);
+  if (maybeLoaded) policy = maybeLoaded;
 
   const optimizer = tf.train.adam(1e-3);
 
@@ -229,6 +373,7 @@ async function main() {
   // Record run metadata (sidecar) for traceability
   try {
     const meta = {
+      version: { ...TRAINING_VERSION, string: TRAINING_VERSION_STR },
       mode: MODE,
       levelArg: String(LEVEL_ARG),
       episodes: EPISODES,
@@ -255,18 +400,22 @@ async function main() {
     }
     sim.init({ world: { ...world, level }, seed, level });
 
-    const obsBuf = [];
-    const actBuf = [];
-    const logpBuf = [];
-    const rewBuf = [];
+  const obsBuf = [];
+  const actBuf = [];
+  const logpBuf = [];
+  const rewBuf = [];
 
-    let done = false;
+  let done = false;
     let steps = 0;
     let prevSnap = sim.getState();
+  // Shaping diagnostics accumulators
+  let sumCosSim = 0, countCos = 0;
+  let sumPunish = 0, countPunish = 0;
+  let sumRewardMs = 0, countRewardMs = 0;
 
     while (!done && steps < MAX_STEPS) {
       const obs = makeObservation(sim);
-      const out = tf.tidy(() => policy.predict(tf.tensor2d([obs])));
+  const out = tf.tidy(() => policy.predict(tf.tensor2d([obs])));
       const action = sampleAction(tf, out, ep, EPISODES);
       out.dispose();
 
@@ -289,7 +438,22 @@ async function main() {
       const { done: d } = sim.step(1);
       done = d;
 
-      const reward = computeReward(prevSnap, sim);
+      let reward = computeReward(prevSnap, sim);
+      // Apply experimental punishment when aiming too close to the player
+      if (PUNISH_NEAR_AIM > 0) {
+        const p = TU.computePunishNearAim(action, sim, PUNISH_NEAR_AIM, PUNISH_NEAR_AIM_RADIUS);
+        reward += p;
+        if (p < 0) { sumPunish += -p; countPunish++; }
+      }
+      // Reward alignment of aim direction toward the mothership when present
+      if (REWARD_AIM_MS > 0) {
+        const r = TU.computeRewardAimMs(action, sim, REWARD_AIM_MS, REWARD_AIM_MS_MINSTEP);
+        reward += r;
+        if (r !== 0) { sumRewardMs += Math.abs(r); countRewardMs++; }
+      }
+      // Cosine similarity toward mothership for diagnostics
+      const cs = TU.computeCosSim(action, sim);
+      if (cs !== 0) { sumCosSim += cs; countCos++; }
       prevSnap = sim.getState();
 
       obsBuf.push(obs);
@@ -361,7 +525,7 @@ async function main() {
       const aimLossPer = aimMean.sub(aimTargets).square(); // [T,2]
       const aimLoss = aimLossPer.mul(wKeys).mean();
 
-      const total = keyLoss.add(aimLoss.mul(0.1));
+  const total = keyLoss.add(aimLoss.mul(0.1));
 
       X.dispose();
       keyTargets.dispose();
@@ -372,10 +536,22 @@ async function main() {
       return total;
     });
 
-    // Logging
+  // Logging
     const epReturn = rewBuf.reduce((a,b)=>a+b,0);
     addStats(sim.level, win, steps, epReturn);
-    console.log(`[train_rl] ep=${ep+1}/${EPISODES} level=${sim.level} steps=${steps} return=${epReturn.toFixed(3)} outcome=${win?'win':'loss'}`);
+  // Determine outcome label for logging (treat timeout distinctly)
+  const sEnd = sim.getState();
+  const noEnemies = (sEnd.robotsCount === 0) && (!sim.mothership || sim.mothership.health <= 0);
+  const playerDead = (sim.player.health <= 0);
+  const outcomeTag = TU.classifyOutcome({ done, noEnemies, playerDead });
+  console.log(`[train_rl] ep=${ep+1}/${EPISODES} level=${sim.level} steps=${steps} return=${epReturn.toFixed(3)} outcome=${outcomeTag}`);
+    if (LOG_SHAPING) {
+      const avgCos = countCos ? (sumCosSim / countCos) : 0;
+      const avgPunish = countPunish ? (sumPunish / countPunish) : 0;
+      const avgRewardMs = countRewardMs ? (sumRewardMs / countRewardMs) : 0;
+      const nearFrac = steps ? (countPunish / steps) : 0;
+      console.log(`[train_rl] shaping ep=${ep+1} cosSimAvg=${avgCos.toFixed(3)} msSteps=${countCos}/${steps} punishAvg=${avgPunish.toFixed(4)} nearFrac=${nearFrac.toFixed(2)} rewardMsAvg=${avgRewardMs.toFixed(4)}`);
+    }
 
     // Periodic aggregated stats
     if ((ep+1) % Math.max(1, Math.floor(EPISODES/5)) === 0 || ep === EPISODES - 1) {
@@ -416,6 +592,16 @@ async function saveModel(model, dir) {
       trainingConfig: artifacts.trainingConfig || undefined
     };
     fs.writeFileSync(mjson, JSON.stringify(payload, null, 2));
+    // Persist training meta for compatibility checks
+    try {
+      const meta = {
+        version: { ...TRAINING_VERSION, string: TRAINING_VERSION_STR },
+        mode: MODE,
+        levelArg: String(LEVEL_ARG),
+        updatedAt: new Date().toISOString()
+      };
+      fs.writeFileSync(path.join(outDir, 'training_meta.json'), JSON.stringify(meta, null, 2));
+    } catch {}
     console.log(`[train_rl] Saved model to ${outDir}`);
     return {
       modelArtifactsInfo: {

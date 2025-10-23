@@ -32,6 +32,7 @@ This repository is inspired by DeepMind's approach to Atari games, where AI agen
 - Levels: Use the level query param to enable new mechanics in the Human game. Example: ?level=2. The AI Demo page also has a top-right Level selector (or use ?level=1|2) that influences the policy model it loads and the observation conditioning.
 - Run tests:
   - npm run test:integration
+  - Windows (PowerShell): use `npm run test:integration:win` or `npm run test:win` for a POSIX-free runner that also writes logs to `./logs`.
 
 ## Project Roadmap (high-level)
 - Phase 1: Finish Human game implementation + Human web server + Control Panel
@@ -324,7 +325,8 @@ The following changes will be applied to the human implementation (canonical) to
    - Start/stop recording a human play session (TBD).
    - Launch AI Demo replays of a selected recording via the AI Demo server.
 4. Tests
-   - npm run test:integration
+  - npm run test:integration
+  - Windows (PowerShell): `npm run test:integration:win` or `npm run test:win`
 
 ## Training (experimental)
 - Kick off a quick RL training session that uses the headless Sim and saves a model under `NNet/policy_model/`:
@@ -339,7 +341,24 @@ The following changes will be applied to the human implementation (canonical) to
   - If no model is found, it falls back to a simple heuristic controller.
   - The AI Demo conditions observations with the selected level one-hot so models trained with level context work as expected.
 - Hardware acceleration:
-  - The trainer auto-detects available backends. On Windows, if `@tensorflow/tfjs-node` or `@tensorflow/tfjs-node-gpu` is installed and your environment is set up (CUDA/cuDNN for GPU), the run will use the native TensorFlow backend. Otherwise, it falls back to pure JS (`@tensorflow/tfjs`), which is slower but portable.
+  - The trainer auto-detects available backends.
+   - Native TensorFlow (fastest): install `@tensorflow/tfjs-node` (CPU) or `@tensorflow/tfjs-node-gpu` (GPU). On Windows this may require Python and MSVC build tools if prebuilt binaries are unavailable.
+   - WASM (portable): if native bindings aren’t available, it falls back to `@tensorflow/tfjs` with the WASM backend.
+  - Windows tip: we declare `@tensorflow/tfjs-node` and `@tensorflow/tfjs-node-gpu` as optionalDependencies. If they fail to install on Windows, training still runs via WASM/JS. For GPU, consider running in WSL2 + Docker (below).
+
+### Run training with GPU in WSL2 + Docker (recommended on Windows)
+1) Ensure Docker Desktop is installed and WSL2 integration is enabled with GPU support (NVIDIA drivers installed; `nvidia-smi` works inside WSL2).
+2) Build the image:
+  - docker build -t robotattack-tfjs-gpu -f docker/Dockerfile.tfjs-gpu .
+3) Run the container with your repo mounted and GPU access:
+  - docker run --gpus all --rm -it -v "$PWD":/workspace -w /workspace robotattack-tfjs-gpu bash
+4) Inside the container:
+  - npm ci
+  - npm install @tensorflow/tfjs-node-gpu@^4.20.0  # should use prebuilt Linux GPU binding
+  - node -e "const tf=require('@tensorflow/tfjs-node-gpu'); console.log('backend', tf.getBackend());"
+  - node NNet/train_rl.js --episodes=2 --level=2 --save-dir=./NNet/policy_model/level-2
+
+If the GPU package fails to install, try `@tensorflow/tfjs-node@^4.20.0` (CPU) as a fallback.
   - The script logs detected logical CPUs and whether a GPU backend is active.
 - Tuning activity vs. skill:
   - Early episodes favor higher key press rates and larger crosshair movements; as episodes progress, exploration noise is annealed so a better policy can exhibit calmer inputs.

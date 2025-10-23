@@ -539,7 +539,7 @@ function stepPhysics(){
             if (m.x > yourRobot.x-yrm/2 && m.x < yourRobot.x+yrm/2 &&
                 m.y > yourRobot.y-yrm/2 && m.y < yourRobot.y+yrm/2) {
                 mothership.missiles.splice(i, 1);
-                yourRobot.health -= 0.2; // missiles hit harder
+                yourRobot.health -= 0.05; // reduced to 25% damage
             }
         }
     }

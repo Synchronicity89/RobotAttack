@@ -44,7 +44,7 @@ class SimGame {
     // Robots not simulated yet; avoid false "win" due to empty array
     this._hasRobots = false;
 
-    // Ledges (seeded, like Human/AI Demo)
+  // Ledges (seeded, like Human/AI Demo)
     this.ledgeCount = 18;
     this.ledges = [];
     this.ledgeOrder = [];
@@ -57,6 +57,9 @@ class SimGame {
     // Fallback support: if a recording lacks the frame-0 mousemove that the
     // Human code records, emit one initial shot toward crosshairStart.
     this._initialShotChecked = false;
+
+    // Level 2: Mothership boss with missiles
+    this.mothership = null;
   }
 
   // Seeded helper like Human/AI Demo
@@ -93,12 +96,20 @@ class SimGame {
   generateLedges(mcw, mch) {
     this.ledges = [];
     for (let i = 0; i < this.ledgeCount; i++) {
-      this.ledges.push({
+      const base = {
         id: 0,
         y: this.randBetween(0.1, 0.9, 0.01),
         x: this.randBetween(0.1, 0.9, 0.01),
         w: this.randBetween(1/16, 1/4, 0.01)
-      });
+      };
+      // Level 2+: moving ledges (sinusoidal in Y)
+      if (this.level >= 2) {
+        base.baseY = base.y;
+        base.amp = this.randBetween(0.05, 0.25, 0.01);
+        base.omega = this.randBetween(0.002, 0.01, 0.001);
+        base.phase = this.rand() * Math.PI * 2;
+      }
+      this.ledges.push(base);
     }
     this.ledgeOrder = [];
     const pool = this.ledges.slice();
@@ -159,6 +170,24 @@ class SimGame {
       this.robots.push(this.makeRobot(i, mcw, mch, mcm));
     }
     this._hasRobots = this.robots.length > 0;
+
+    // Level 2: create mothership
+    if (this.level >= 2) {
+      const w = Math.max(mcm/10, (mcm/20)*6);
+      const h = Math.max(mcm/14, (mcm/20)*4);
+      this.mothership = {
+        health: 10,
+        w, h,
+        x: mcw/2,
+        y: mch*0.2,
+        velX: Math.max(this.velChange * 0.5, 0.5),
+        missiles: [], // {id,x,y,angle,speed,r}
+        idCounter: 0,
+        firePeriod: 180
+      };
+    } else {
+      this.mothership = null;
+    }
 
     // Reset initial-shot check on new init
     this._initialShotChecked = false;
@@ -224,6 +253,16 @@ class SimGame {
     // Integrate
     this.player.x += this.player.vx;
     this.player.y += this.player.vy;
+
+    // Level 2+: update ledge vertical motion before collision
+    if (this.level >= 2) {
+      for (const L of this.ledgeOrder) {
+        if (L.amp && L.omega) {
+          const yRaw = L.baseY + L.amp * Math.sin((this.timer + (L.phase || 0)) * L.omega);
+          L.y = yRaw;
+        }
+      }
+    }
 
     // Sticky ledges (match Human/AI Demo conditions)
     let fallingNow = true;
@@ -303,6 +342,17 @@ class SimGame {
               L.y > hitRobot.y - this.yrm && L.y < hitRobot.y + this.yrm) {
             this.playerLasers.splice(i, 1);
             hitRobot.health -= 0.2;
+            continue;
+          }
+        }
+        // Level 2+: also hit test vs mothership AABB
+        if (this.mothership && this.mothership.health > 0) {
+          const ms = this.mothership;
+          if (L.x > ms.x - ms.w/2 && L.x < ms.x + ms.w/2 &&
+              L.y > ms.y - ms.h/2 && L.y < ms.y + ms.h/2) {
+            this.playerLasers.splice(i, 1);
+            ms.health -= 0.2;
+            continue;
           }
         }
       }
@@ -312,7 +362,18 @@ class SimGame {
         const L = this.playerLasers[i];
         L.x += Math.cos(L.angle) * 10;
         L.y += Math.sin(L.angle) * 10;
-        if (L.x < 0 || L.x > mcw || L.y < 0 || L.y > mch) {
+        // Level 2+: also test vs mothership
+        let removed = false;
+        if (this.mothership && this.mothership.health > 0) {
+          const ms = this.mothership;
+          if (L.x > ms.x - ms.w/2 && L.x < ms.x + ms.w/2 &&
+              L.y > ms.y - ms.h/2 && L.y < ms.y + ms.h/2) {
+            this.playerLasers.splice(i, 1);
+            ms.health -= 0.2;
+            removed = true;
+          }
+        }
+        if (!removed && (L.x < 0 || L.x > mcw || L.y < 0 || L.y > mch)) {
           this.playerLasers.splice(i, 1);
         }
       }
@@ -390,6 +451,32 @@ class SimGame {
       if (rb.health < 0) this.robots.splice(i, 1);
     }
 
+    // Level 2: update mothership and missiles vs player
+    if (this.mothership && this.mothership.health > 0) {
+      const ms = this.mothership;
+      // Horizontal drift with edge bounce
+      ms.x += ms.velX;
+      if (ms.x < ms.w/2 || ms.x > mcw - ms.w/2) ms.velX *= -1;
+      // Fire on schedule
+      if (this.timer % ms.firePeriod === 0) {
+        const ang = Math.atan2(this.player.y - ms.y, this.player.x - ms.x);
+        ms.missiles.push({ id: ms.idCounter++, x: ms.x, y: ms.y, angle: ang, speed: Math.max(this.velChange*2, 2), r: Math.max(this.yrm/6, 4) });
+      }
+      // Advance missiles and check collisions
+      for (let i = ms.missiles.length - 1; i >= 0; i--) {
+        const m = ms.missiles[i];
+        m.x += Math.cos(m.angle) * m.speed;
+        m.y += Math.sin(m.angle) * m.speed;
+        if (m.x > this.player.x - this.yrm/2 && m.x < this.player.x + this.yrm/2 &&
+            m.y > this.player.y - this.yrm/2 && m.y < this.player.y + this.yrm/2) {
+          ms.missiles.splice(i, 1);
+          this.player.health -= 0.05; // reduced to 25% damage
+          continue;
+        }
+        if (m.x < 0 || m.x > mcw || m.y < 0 || m.y > mch) ms.missiles.splice(i, 1);
+      }
+    }
+
     // Timers and cooldown
     this.timer++;
     if (this.timer % 10 === 0) this.yrCanShoot = true;
@@ -419,8 +506,11 @@ class SimGame {
       this.frame++;
 
       // Terminal checks:
-      // - Win only makes sense if robots are actually simulated
-      const noEnemies = this._hasRobots && (this.robots.length === 0);
+      // - Win only makes sense if enemies are actually simulated
+      const enemiesPresent = this._hasRobots || (this.mothership != null);
+      const msDeadOrAbsent = (!this.mothership || this.mothership.health <= 0);
+      const robotsCleared = (this.robots.length === 0);
+      const noEnemies = enemiesPresent && robotsCleared && msDeadOrAbsent;
       const playerDead = this.player.health <= 0;
       if (noEnemies || playerDead) {
         const gameDrawn = noEnemies && playerDead;

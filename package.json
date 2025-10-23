@@ -9,7 +9,8 @@
     "start:aidemo": "node server/aidemo-server.js",
     "test": "sh -c 'mkdir -p logs; ts=$(date +%F_%H-%M-%S); jest --runInBand 2>&1 | tee logs/test-$ts.log | tee logs/test-latest.log > /dev/null'",
     "test:integration": "sh -c 'mkdir -p logs; ts=$(date +%F_%H-%M-%S); jest tests/integration --runInBand 2>&1 | tee logs/test-integration-$ts.log | tee logs/test-integration-latest.log > /dev/null'",
-    "test:win": "jest --runInBand",
+    "test:win": "node scripts/test-runner.js",
+    "test:integration:win": "node scripts/test-integration-runner.js",
     "sim:run": "node Sim/run-sim.js --rec=./data/recordings/sample-replay.json",
     "sim:run:latest": "node Sim/run-sim.js --latest",
     "sim:assert-latest": "node Sim/run-sim.js --latest --assert",
@@ -30,5 +31,9 @@
     "jest": "^29.7.0",
     "jest-environment-jsdom": "^29.7.0",
     "jsdom": "^24.0.0"
+  },
+  "optionalDependencies": {
+    "@tensorflow/tfjs-node": "^4.20.0",
+    "@tensorflow/tfjs-node-gpu": "^4.20.0"
   }
 }

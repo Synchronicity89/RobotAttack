@@ -1,0 +1,24 @@
+# GPU-enabled environment for tfjs-node-gpu training on Linux (WSL2/Docker)
+# Pick CUDA 11.2.x to match libtensorflow 2.9.1 used by tfjs-node(-gpu) 4.x
+FROM nvidia/cuda:11.2.2-cudnn8-runtime-ubuntu20.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates gnupg python3 build-essential git \
+ && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js 18 LTS
+RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
+ && apt-get install -y nodejs \
+ && node --version && npm --version
+
+# Working dir. We'll bind-mount your repo here.
+WORKDIR /workspace
+
+# Speed up npm in containers
+ENV npm_config_loglevel=info
+
+# Default command prints GPU info and a quick TFJS check
+COPY NNet/hardware.js /tmp/hardware.js
+CMD ["bash", "-lc", "echo 'GPU visible:'; nvidia-smi || true; \
+  node -e \"const tfjs=require('@tensorflow/tfjs'); try{require('@tensorflow/tfjs-node-gpu');}catch(e){try{require('@tensorflow/tfjs-node');}catch(e2){}}; (async()=>{console.log('TF backend:', tfjs.getBackend&&tfjs.getBackend());})();\""]
